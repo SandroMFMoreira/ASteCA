@@ -1,23 +1,18 @@
-# ignore everything in root
-/*
-# except for these files
-!README.md
-!LICENSE.txt
-!poetry.lock
-!pyproject.toml
-!.readthedocs.yaml
+# Ignore folders starting with "Results" or "junk"
+Results*/
+junk*/
 
-# and these folderers
-!/asteca
-!/docs
-
-# But ignore these files
+# Ignore Python bytecode and Jupyter autosaves
 *.pyc
+__pycache__/
+.ipynb_checkpoints/
 
-# and ignore these folders
-/docs/build/*
-/docs/_build/*
-/docs/autoapi/*
-/docs/apidocs/*
-# Jupyter Notebook
-.ipynb_checkpoints
+# Ignore PyCharm project settings
+.idea/
+
+# Ignore virtual environments
+.venv/
+env/
+venv/
+
+dias_dr3_0.5.csv

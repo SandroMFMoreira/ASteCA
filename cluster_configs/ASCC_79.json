@@ -1,0 +1,8 @@
+{
+  "cluster_name": "ASCC_79",
+  "evolution_model": "parsec",
+  "l_adjust": "cmd_ccd",
+  "phot_system": "Gaia",
+  "av_fixed": false,
+  "results_dir": "results/Plots"
+}
