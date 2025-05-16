@@ -1,5 +1,4 @@
 import os
-
 import numpy as np
 import pandas as pd
 
@@ -40,6 +39,16 @@ phot_systs_data = {
         "sep_cols": r"\s+",
         "idx_col_line": -2,
         "myr_to_log10": True,
+    },
+    "BARAFFE":{
+        "col_names": {
+            "mass_col": "M/Ms",
+            "age_col": "Age",
+            "met_col": "Z",
+        },
+            "sep_cols": r"\s+",
+            "comment_char": "#",
+            "idx_col_line": -1,
     },
 }
 
@@ -290,6 +299,20 @@ def read(
             # Store data
             met_age_vals.append([met, age])
             isoch_dataframes.append(df_file_path[cols_keep_ps].astype(float))
+
+        elif model == "BARAFFE":
+            # Group by age
+            age_blocks = df_file_path.groupby(age_col, sort=False)
+
+            # Process age groups
+            for _, df in age_blocks:
+                # Extract met, age values (use first element, all are equal in column)
+                met = str(df[met_col].iloc[0])  # Assuming metallicity is constant
+                age = str(df[age_col].iloc[0])
+
+                # Store data
+                met_age_vals.append([met, age])
+                isoch_dataframes.append(df[cols_keep_ps].astype(float))
 
     return met_age_vals, isoch_dataframes
 

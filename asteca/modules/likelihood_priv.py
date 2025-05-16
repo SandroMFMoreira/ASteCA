@@ -5,7 +5,10 @@ from scipy.special import loggamma
 
 
 def lkl_data(
-    bin_method: str, mag_v: np.ndarray, colors_v: list[np.ndarray]
+    bin_method: str,
+    mag_v: np.ndarray,
+    colors_v: list[np.ndarray],
+    compute_l: str = "cmd",  # Default flag
 ) -> tuple[list, list, np.ndarray, np.ndarray]:
     """Prepare data for likelihood calculation.
 
@@ -18,32 +21,66 @@ def lkl_data(
     :type mag_v: np.ndarray
     :param colors_v: List of arrays of colors.
     :type colors_v: list[np.ndarray]
+    :param compute_l: Flag to specify likelihood calculation type.
+        - "cmd" -> Compute CMD histogram.
+        - "ccd" -> Compute CCD histogram (requires at least two colors).
+        - "cmd_ccd" -> Compute both CMD and CCD histograms (requires two colors).
+    :type compute_l: str
 
     :return: Bin ranges, number of bins, indexes of bins with stars, and flattened histogram.
     :rtype: tuple[list, list, np.ndarray, np.ndarray]
+
+    :raises ValueError: If `compute_l` is "ccd" or "cmd_ccd" but fewer than two colors are provided.
+    :raises ValueError: If `compute_l` is not one of ["cmd", "ccd", "cmd_ccd"].
     """
+
+    # Validate compute_l flag
+    valid_flags = {"cmd", "ccd", "cmd_ccd"}
+    if compute_l not in valid_flags:
+        raise ValueError(f"Invalid value for 'compute_l': '{compute_l}'. Must be one of {valid_flags}.")
+
+    # Validate color input when needed
+    if compute_l in {"ccd", "cmd_ccd"} and len(colors_v) < 2:
+        raise ValueError("Cannot compute CCD histogram: At least two colors are required, but fewer were provided.")
+
     # Obtain bin edges for each dimension, defining a grid.
     ranges, Nbins = bin_edges_f(bin_method, mag_v, colors_v)
 
     # Obtain histogram for observed cluster.
     hess_diag = []
-    for i, col in enumerate(colors_v):
+
+    # Compute CMD histogram if "cmd" or "cmd_ccd"
+    if compute_l in {"cmd", "cmd_ccd"}:
         # Fast 2D histogram
         hess_diag.append(
             histogram2d(
                 mag_v,
-                col,
+                colors_v[0],
                 range=[
                     [ranges[0][0], ranges[0][1]],
-                    [ranges[i + 1][0], ranges[i + 1][1]],
+                    [ranges[1][0], ranges[1][1]],
                 ],
-                bins=[Nbins[0], Nbins[i + 1]],
+                bins=[Nbins[0], Nbins[1]],
+            )
+        )
+
+    # Compute CCD histogram if "ccd" or "cmd_ccd"
+    if compute_l in {"ccd", "cmd_ccd"}:
+        hess_diag.append(
+            histogram2d(
+                colors_v[0],
+                colors_v[1],
+                range=[
+                    [ranges[1][0], ranges[1][1]],
+                    [ranges[2][0], ranges[2][1]],
+                ],
+                bins=[Nbins[1], Nbins[2]],
             )
         )
 
     # Flatten array
     cl_histo_f = []
-    for i, diag in enumerate(hess_diag):
+    for diag in hess_diag:
         cl_histo_f += list(np.array(diag).ravel())
     cl_histo_f = np.array(cl_histo_f)
 
@@ -53,7 +90,6 @@ def lkl_data(
     # Remove all bins where n_i=0 (no observed stars)
     cl_histo_f_z = cl_histo_f[cl_z_idx]
 
-    # These variables are used by the likelihood functions called by the get() method
     return ranges, Nbins, cl_z_idx, cl_histo_f_z
 
 
@@ -111,6 +147,7 @@ def tremmel(
     cl_histo_f_z: np.ndarray,
     max_lkl: float,
     synth_clust: np.ndarray,
+    compute_l: str = "cmd",
 ) -> float:
     r"""Poisson likelihood ratio as defined in Tremmel et al (2013), Eq 10 with
     v_{i,j}=1. This returns the log likelihood.
@@ -158,6 +195,10 @@ def tremmel(
     :param max_lkl: Maximum likelihood value, used for normalization
     :type max_lkl: float
     :param synth_clust: Synthetic cluster data.
+    :param compute_l: Specifies which likelihood to compute:
+                      - "cmd" for Color-Magnitude Diagram
+                      - "ccd" for Color-Color Diagram
+                      - "cmd_ccd" for both
     :type synth_clust: np.ndarray
 
     :return: Log likelihood value.
@@ -169,41 +210,63 @@ def tremmel(
 
     # Obtain histogram for the synthetic cluster.
     mag, colors = synth_clust[0], synth_clust[1:]
+
+    # Ensure valid compute_l option
+    if compute_l not in ["cmd", "ccd", "cmd_ccd"]:
+        raise ValueError(f"Invalid compute_l value: {compute_l}. Choose from 'cmd', 'ccd', or 'cmd_ccd'.")
+
+    # Ensure there are enough colors for the requested computation
+    if compute_l in ["ccd", "cmd_ccd"] and len(colors) < 2:
+        raise ValueError(f"Cannot compute '{compute_l}': At least two colors are required for CCD.")
+
     syn_histo_f = []
-    for i, col in enumerate(colors):
-        # hess_diag = np.histogram2d(
-        #     mag, col, bins=[
-        #         self.bin_edges[0]] + [self.bin_edges[i + 1]])[0]
+
+    if compute_l in ["cmd", "cmd_ccd"]:
         hess_diag = histogram2d(
             mag,
-            col,
+            colors[0],
             range=[
                 [ranges[0][0], ranges[0][1]],
-                [ranges[i + 1][0], ranges[i + 1][1]],
+                [ranges[1][0], ranges[1][1]],
             ],
-            bins=[Nbins[0], Nbins[i + 1]],
+            bins=[Nbins[0], Nbins[1]],
         )
-
-        # Flatten array
         syn_histo_f += list(hess_diag.ravel())
+
+    if compute_l in ["ccd", "cmd_ccd"]:
+        hess_diag = histogram2d(
+            colors[0],
+            colors[1],
+            range=[
+                [ranges[1][0], ranges[1][1]],
+                [ranges[2][0], ranges[2][1]],
+            ],
+            bins=[Nbins[1], Nbins[2]],
+        )
+        syn_histo_f += list(hess_diag.ravel())
+
+    # Convert to NumPy array
     syn_histo_f = np.array(syn_histo_f)
 
-    # Remove all bins where n_i = 0 (no observed stars).
+    # Remove bins where observed stars are absent
     syn_histo_f_z = syn_histo_f[cl_z_idx]
 
+    # Compute likelihood using Tremmel et al. (2013) formula
     SumLogGamma = np.sum(
         loggamma(cl_histo_f_z + syn_histo_f_z + 0.5) - loggamma(syn_histo_f_z + 0.5)
     )
 
-    # M = syn_histo_f_z.sum()
-    # ln(2) ~ 0.693
+    # Compute final likelihood
     tremmel_lkl = SumLogGamma - 0.693 * syn_histo_f_z.sum()
+
+    # Handle invalid max_lkl
+    if max_lkl == 0:
+         raise ValueError("max_lkl must be nonzero to avoid division errors.")
 
     return 1 - tremmel_lkl / max_lkl
 
-
 # def visual(cluster_dict, synth_clust):
-#     # If synthetic cluster is empty, assign a small likelihood value.
+#     # If synthetic  cluster is empty, assign a small likelihood value.
 #     if not synth_clust.any():
 #         return -1.0e09
 

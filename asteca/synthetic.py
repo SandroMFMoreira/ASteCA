@@ -2,7 +2,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-
+import matplotlib.pyplot as plt
 from .cluster import Cluster
 from .isochrones import Isochrones
 from .modules import mass_binary as mb

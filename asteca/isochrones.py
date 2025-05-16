@@ -114,7 +114,7 @@ class Isochrones:
 
         # Check model input
         self.model = self.model.upper()
-        models = ("PARSEC", "MIST", "BASTI")
+        models = ("PARSEC", "MIST", "BASTI", 'BARAFFE')
         if self.model not in models:
             raise ValueError(
                 f"Model '{self.model}' not recognized. Should be one of {models}"

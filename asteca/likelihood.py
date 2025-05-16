@@ -33,17 +33,23 @@ class Likelihood:
     """
 
     def __init__(
-        self, my_cluster: Cluster, lkl_name: str = "plr", bin_method: str = "knuth"
+        self, my_cluster: Cluster, lkl_name: str = "plr", bin_method: str = "knuth", compute_l: str = 'cmd'
     ) -> None:
         self.my_cluster = my_cluster
         self.lkl_name = lkl_name
         self.bin_method = bin_method
+        self.compute_l = compute_l
 
         likelihoods = ("plr", "bins_distance", "chisq")
         if self.lkl_name not in likelihoods:
             raise ValueError(
                 f"'{self.lkl_name}' not recognized. Should be one of {likelihoods}"
             )
+
+        # Validate compute_l flag
+        valid_flags = {"cmd", "ccd", "cmd_ccd"}
+        if compute_l not in valid_flags:
+            raise ValueError(f"Invalid value for 'compute_l': '{compute_l}'. Must be one of {valid_flags}.")
 
         bin_methods = ("knuth", "blocks", "scott", "freedman", "fixed")
         if self.bin_method not in bin_methods:
@@ -54,7 +60,7 @@ class Likelihood:
 
         # Obtain data used by the ``likelihood.get()`` method
         self.ranges, self.Nbins, self.cl_z_idx, self.cl_histo_f_z = lpriv.lkl_data(
-            bin_method, my_cluster.mag_v, my_cluster.colors_v
+            bin_method, my_cluster.mag_v, my_cluster.colors_v, compute_l
         )
 
         self.max_lkl = 1
@@ -90,6 +96,7 @@ class Likelihood:
                 self.cl_histo_f_z,
                 self.max_lkl,
                 synth_clust,
+                self.compute_l,
             )
         # if self.lkl_name == "visual":
         #     return lpriv.visual(self, synth_clust)
