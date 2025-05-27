@@ -1,4 +1,5 @@
 # Ignore folders starting with "Results" or "junk"
+cluster_configs/
 Results*/
 junk*/
 

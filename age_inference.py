@@ -172,11 +172,11 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
         population_size=pop_size
     )
 
-    # This is a temporary file required by pyABC
-    db_path = "sqlite:///" + os.path.join(tempfile.gettempdir(), f"pyABC_{cluster_name}.db")
+    os.makedirs("abc_dbs", exist_ok=True)
+    db_path = "sqlite:///" + os.path.abspath(os.path.join("abc_dbs", f"pyABC_{cluster_name}.db"))
     abc.new(db_path)
 
-    history = abc.run(minimum_epsilon=0.01, max_nr_populations=25)
+    history = abc.run(minimum_epsilon=0.01, max_nr_populations=15)
 
     # Extract results
     df_results, weights = history.get_distribution()
@@ -217,10 +217,12 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
     pdf_filename = f"{results_dir}/{cluster_name}.pdf"
     with PdfPages(pdf_filename) as pdf:
 
-        # Matrix of 1d and 2d histograms over all parameters
-        pyabc.visualization.plot_histogram_matrix(history)
-        pdf.savefig()
-        plt.close()
+        if len(df.keys()) > 1:
+
+            # Matrix of 1d and 2d histograms over all parameters
+            pyabc.visualization.plot_histogram_matrix(history)
+            pdf.savefig()
+            plt.close()
 
         pyabc.visualization.plot_credible_intervals(history)
         pdf.savefig()
@@ -321,8 +323,6 @@ def main():
             color="Vmag-Imag",  e_color="e_Vmag-Imag",
             color2="Umag-Bmag", e_color2="e_Umag-Bmag",
         )
-
-    print(my_cluster)
 
     # Delegate to the refactored process_cluster
     results = process_cluster(

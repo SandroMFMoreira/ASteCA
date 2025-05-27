@@ -7,7 +7,7 @@ from catalogues import get_catalogue
 
 # Load data
 df = get_catalogue(['Dias'])[0]
-df = df[(df.r_sun < 1750) & (df.age < 150)]
+df = df[(df.r_sun < 400) & (df.age < 100)]
 cluster_names = df['cluster'].unique()
 
 # Create directories if they don't exist
@@ -16,10 +16,10 @@ os.makedirs(config_dir, exist_ok=True)
 
 # Global config
 evolution_model = 'parsec'
-l_adjust        = 'cmd_ccd'
+l_adjust        = 'ccd'
 phot_system     = 'Gaia'
 av_fixed        = False
-results_dir = 'results/Plots'
+results_dir = 'results_gaia/Plots'
 os.makedirs(results_dir, exist_ok=True)
 results_name = "results_name"
 overwrite = False  # <-- SET THIS TO True to force rerun
@@ -77,14 +77,14 @@ if __name__ == '__main__':
 
     # Merge results
     result_files = [
-        os.path.join(results_dir, f"results_{name}.csv")
+        os.path.join(f"./junk/results_{name}.csv")
         for name in cluster_names
-        if os.path.exists(os.path.join(results_dir, f"results_{name}.csv"))
+        if os.path.exists(f"./junk/results_{name}.csv")
     ]
 
     if result_files:
         combined = pd.concat((pd.read_csv(f) for f in result_files), ignore_index=True)
-        merged_path = os.path.join(results_dir, f'{results_name}.csv')
+        merged_path = os.path.join(f'{results_name}.csv')
         combined.to_csv(merged_path, index=False)
         print(f"Merged all results into {merged_path}")
     else:
