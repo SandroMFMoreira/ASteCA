@@ -2,6 +2,7 @@ import numpy as np
 from astropy.stats import calculate_bin_edges
 from fast_histogram import histogram2d
 from scipy.special import loggamma
+import matplotlib.pyplot as plt
 
 
 def lkl_data(
@@ -115,7 +116,7 @@ def bin_edges_f(
     bin_edges = []
 
     if bin_method == "fixed":
-        N_mag, N_col = 15, 10
+        N_mag, N_col = 25, 20
         # Magnitude
         mag_min, mag_max = np.nanmin(mag), np.nanmax(mag)
         bin_edges.append(np.linspace(mag_min, mag_max, N_mag))
@@ -139,6 +140,144 @@ def bin_edges_f(
 
     return ranges, Nbins
 
+def plot_bin_weights_imshow(
+    unweighted_hist_cmd, weighted_hist_cmd,
+    x_range_cmd, y_range_cmd, nbx_cmd, nby_cmd,
+    tremmel, max_lk,
+    unweighted_hist_ccd=None, weighted_hist_ccd=None,
+    x_range_ccd=None, y_range_ccd=None, nbx_ccd=None, nby_ccd=None,
+    cmap="viridis"
+):
+    """
+    Plot CMD (mandatory) and optionally CCD (if unweighted_hist_ccd and weighted_hist_ccd are provided).
+
+    Parameters
+    ----------
+    unweighted_hist_cmd, weighted_hist_cmd : 1D arrays
+        Flattened histograms for CMD with shape (nbx_cmd * nby_cmd,).
+    x_range_cmd : [min, max]
+        magnitude range (ranges[0])
+    y_range_cmd : [min, max]
+        color range (ranges[1])
+    nbx_cmd, nby_cmd : int
+        bins for CMD (Nbins[0], Nbins[1])
+
+    tremmel, max_lk : scalar
+        values shown in the figure title/annotation.
+
+    unweighted_hist_ccd, weighted_hist_ccd : optional 1D arrays
+        Flattened histograms for CCD with shape (nbx_ccd * nby_ccd,).
+    x_range_ccd, y_range_ccd : optional [min, max]
+        ranges for CCD axes (color1, color2) -> typically ranges[1], ranges[2]
+    nbx_ccd, nby_ccd : optional ints
+        bins for CCD (Nbins[1], Nbins[2])
+
+    Returns
+    -------
+    None (shows the figure)
+    """
+
+    # reshape CMD arrays
+    H_orig_cmd = np.asarray(unweighted_hist_cmd).reshape((nbx_cmd, nby_cmd))
+    H_weight_cmd = np.asarray(weighted_hist_cmd).reshape((nbx_cmd, nby_cmd))
+
+    # extents: x=color, y=mag (so extent = [x_min, x_max, y_min, y_max])
+    mag_range = x_range_cmd
+    color_range = y_range_cmd
+    extent_cmd = [color_range[0], color_range[1], mag_range[0], mag_range[1]]
+
+    # decide grid layout depending on whether CCD is provided
+    has_ccd = (unweighted_hist_ccd is not None) and (weighted_hist_ccd is not None) \
+              and (x_range_ccd is not None) and (y_range_ccd is not None) \
+              and (nbx_ccd is not None) and (nby_ccd is not None)
+
+    if has_ccd:
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        ax_cmd = axes[0]
+        ax_ccd = axes[1]
+    else:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        ax_cmd = axes
+        ax_ccd = None
+
+    # ------- CMD row (always present) -------
+    im0 = ax_cmd[0].imshow(H_orig_cmd, origin="lower", extent=extent_cmd, aspect="auto", cmap=cmap)
+    ax_cmd[0].set_title("CMD: Original counts")
+    ax_cmd[0].set_xlabel("Color")
+    ax_cmd[0].set_ylabel("Magnitude")
+    fig.colorbar(im0, ax=ax_cmd[0], fraction=0.046)
+
+    im1 = ax_cmd[1].imshow(H_weight_cmd, origin="lower", extent=extent_cmd, aspect="auto", cmap=cmap)
+    ax_cmd[1].set_title("CMD: Weighted counts")
+    ax_cmd[1].set_xlabel("Color")
+    ax_cmd[1].set_ylabel("Magnitude")
+    fig.colorbar(im1, ax=ax_cmd[1], fraction=0.046)
+
+    ratio_cmd = np.zeros_like(H_orig_cmd, dtype=float)
+    mask_cmd = H_orig_cmd > 0
+    ratio_cmd[mask_cmd] = H_weight_cmd[mask_cmd] / H_orig_cmd[mask_cmd]
+    im2 = ax_cmd[2].imshow(ratio_cmd, origin="lower", extent=extent_cmd, aspect="auto", cmap="coolwarm")
+    ax_cmd[2].set_title("CMD: Weight factor (weighted / original)")
+    ax_cmd[2].set_xlabel("Color")
+    ax_cmd[2].set_ylabel("Magnitude")
+    fig.colorbar(im2, ax=ax_cmd[2], fraction=0.046)
+
+    # draw bin edges for CMD
+    color_edges_cmd = np.linspace(color_range[0], color_range[1], nby_cmd + 1)
+    mag_edges_cmd = np.linspace(mag_range[0], mag_range[1], nbx_cmd + 1)
+    for a in ax_cmd:
+        for x in color_edges_cmd:
+            a.axvline(x, lw=0.6, alpha=0.5)
+        for y in mag_edges_cmd:
+            a.axhline(y, lw=0.6, alpha=0.5)
+        # CMD convention: brighter up -> invert y-axis
+        a.invert_yaxis()
+
+    # ------- CCD row (optional) -------
+    if has_ccd:
+        H_orig_ccd = np.asarray(unweighted_hist_ccd).reshape((nbx_ccd, nby_ccd))
+        H_weight_ccd = np.asarray(weighted_hist_ccd).reshape((nbx_ccd, nby_ccd))
+        extent_ccd = [x_range_ccd[0], x_range_ccd[1], y_range_ccd[0], y_range_ccd[1]]  # x=color1, y=color2
+
+        im3 = ax_ccd[0].imshow(H_orig_ccd, origin="lower", extent=extent_ccd, aspect="auto", cmap=cmap)
+        ax_ccd[0].set_title("CCD: Original counts")
+        ax_ccd[0].set_xlabel("Color 1")
+        ax_ccd[0].set_ylabel("Color 2")
+        fig.colorbar(im3, ax=ax_ccd[0], fraction=0.046)
+
+        im4 = ax_ccd[1].imshow(H_weight_ccd, origin="lower", extent=extent_ccd, aspect="auto", cmap=cmap)
+        ax_ccd[1].set_title("CCD: Weighted counts")
+        ax_ccd[1].set_xlabel("Color 1")
+        ax_ccd[1].set_ylabel("Color 2")
+        fig.colorbar(im4, ax=ax_ccd[1], fraction=0.046)
+
+        ratio_ccd = np.zeros_like(H_orig_ccd, dtype=float)
+        mask_ccd = H_orig_ccd > 0
+        ratio_ccd[mask_ccd] = H_weight_ccd[mask_ccd] / H_orig_ccd[mask_ccd]
+        im5 = ax_ccd[2].imshow(ratio_ccd, origin="lower", extent=extent_ccd, aspect="auto", cmap="coolwarm")
+        ax_ccd[2].set_title("CCD: Weight factor (weighted / original)")
+        ax_ccd[2].set_xlabel("Color 1")
+        ax_ccd[2].set_ylabel("Color 2")
+        fig.colorbar(im5, ax=ax_ccd[2], fraction=0.046)
+
+        # draw bin edges for CCD (note nbx_ccd-> rows, nby_ccd-> cols)
+        color1_edges = np.linspace(x_range_ccd[0], x_range_ccd[1], nby_ccd + 1)
+        color2_edges = np.linspace(y_range_ccd[0], y_range_ccd[1], nbx_ccd + 1)
+        for a in ax_ccd:
+            for x in color1_edges:
+                a.axvline(x, lw=0.6, alpha=0.5)
+            for y in color2_edges:
+                a.axhline(y, lw=0.6, alpha=0.5)
+
+            a.invert_yaxis()
+            # do not invert CCD axes
+
+    # global title / annotation
+    suptitle = f"Tremmel LKL: {tremmel:.4g}   Max LKL (run): {max_lk:.4g}"
+    plt.suptitle(suptitle, y=0.95)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+
 
 def tremmel(
     ranges: list,
@@ -148,6 +287,7 @@ def tremmel(
     max_lkl: float,
     synth_clust: np.ndarray,
     compute_l: str = "cmd",
+    is_imf_weighted: bool = False,
 ) -> float:
     r"""Poisson likelihood ratio as defined in Tremmel et al (2013), Eq 10 with
     v_{i,j}=1. This returns the log likelihood.
@@ -204,66 +344,167 @@ def tremmel(
     :return: Log likelihood value.
     :rtype: float
     """
-    # If synthetic cluster is empty, assign a small likelihood value.
-    if not synth_clust.any():
+    if synth_clust is None or not np.asarray(synth_clust).any():
         return -1.0e09
 
-    # Obtain histogram for the synthetic cluster.
-    mag, colors = synth_clust[0], synth_clust[1:]
+    # Parse synthetic cluster input depending on whether IMF weights exist
+    if is_imf_weighted:
+        mag = synth_clust[0]
+        colors = synth_clust[1: len(synth_clust) - 1]
+        mass_probs = synth_clust[-1]
+    else:
+        mag = synth_clust[0]
+        colors = synth_clust[1:]
 
-    # Ensure valid compute_l option
     if compute_l not in ["cmd", "ccd", "cmd_ccd"]:
-        raise ValueError(f"Invalid compute_l value: {compute_l}. Choose from 'cmd', 'ccd', or 'cmd_ccd'.")
+        raise ValueError(f"Invalid compute_l value: {compute_l}.")
 
-    # Ensure there are enough colors for the requested computation
     if compute_l in ["ccd", "cmd_ccd"] and len(colors) < 2:
         raise ValueError(f"Cannot compute '{compute_l}': At least two colors are required for CCD.")
 
-    syn_histo_f = []
+    # Helper: compute mean probability and counts per 2D bin
+    def mean_prob_per_bin(x, y, probs, x_range, y_range, nbx, nby):
+        x = np.asarray(x).ravel()
+        y = np.asarray(y).ravel()
+        probs = np.asarray(probs).ravel()
+        nbx = int(nbx)
+        nby = int(nby)
+        x_edges = np.linspace(x_range[0], x_range[1], nbx + 1)
+        y_edges = np.linspace(y_range[0], y_range[1], nby + 1)
+        ix = np.digitize(x, x_edges) - 1
+        iy = np.digitize(y, y_edges) - 1
+        mask = (ix >= 0) & (ix < nbx) & (iy >= 0) & (iy < nby)
 
-    if compute_l in ["cmd", "cmd_ccd"]:
-        hess_diag = histogram2d(
-            mag,
-            colors[0],
-            range=[
-                [ranges[0][0], ranges[0][1]],
-                [ranges[1][0], ranges[1][1]],
-            ],
-            bins=[Nbins[0], Nbins[1]],
-        )
-        syn_histo_f += list(hess_diag.ravel())
+        sum_probs = np.zeros((nbx, nby), dtype=float)
+        counts = np.zeros((nbx, nby), dtype=float)
 
-    if compute_l in ["ccd", "cmd_ccd"]:
-        hess_diag = histogram2d(
-            colors[0],
-            colors[1],
-            range=[
-                [ranges[1][0], ranges[1][1]],
-                [ranges[2][0], ranges[2][1]],
-            ],
-            bins=[Nbins[1], Nbins[2]],
-        )
-        syn_histo_f += list(hess_diag.ravel())
+        if mask.any():
+            np.add.at(sum_probs, (ix[mask], iy[mask]), probs[mask])
+            np.add.at(counts, (ix[mask], iy[mask]), 1.0)
 
-    # Convert to NumPy array
-    syn_histo_f = np.array(syn_histo_f)
+        meanp = np.zeros_like(sum_probs)
+        nz = counts > 0
+        # keep your sqrt(prob/count) definition
+        meanp[nz] = np.sqrt(sum_probs[nz] / counts[nz])
 
-    # Remove bins where observed stars are absent
+        return meanp, counts
+
+    syn_histo_f_parts = []
+    unweighted_hist_parts = []
+
+    # Build synthetic histograms: either IMF-weighted (use mass_probs) or plain counts
+    if is_imf_weighted:
+        # CMD: weighted using mass_probs (and also store counts)
+        if compute_l in ["cmd", "cmd_ccd"]:
+            meanp_cmd, counts_cmd = mean_prob_per_bin(
+                mag, colors[0], mass_probs,
+                x_range=[ranges[0][0], ranges[0][1]],
+                y_range=[ranges[1][0], ranges[1][1]],
+                nbx=Nbins[0], nby=Nbins[1]
+            )
+            weighted_cmd = np.zeros_like(counts_cmd, dtype=float)
+            nz = meanp_cmd > 0
+            weighted_cmd[nz] = counts_cmd[nz] / meanp_cmd[nz]
+            syn_histo_f_parts += list(weighted_cmd.ravel())
+            unweighted_hist_parts += list(counts_cmd.ravel())
+
+        # CCD: weighted using mass_probs
+        if compute_l in ["ccd", "cmd_ccd"]:
+            meanp_ccd, counts_ccd = mean_prob_per_bin(
+                colors[0], colors[1], mass_probs,
+                x_range=[ranges[1][0], ranges[1][1]],
+                y_range=[ranges[2][0], ranges[2][1]],
+                nbx=Nbins[1], nby=Nbins[2]
+            )
+            weighted_ccd = np.zeros_like(counts_ccd, dtype=float)
+            nz_ccd = meanp_ccd > 0
+            weighted_ccd[nz_ccd] = counts_ccd[nz_ccd] / meanp_ccd[nz_ccd]
+            syn_histo_f_parts += list(weighted_ccd.ravel())
+            unweighted_hist_parts += list(counts_ccd.ravel())
+
+    else:
+        # Not IMF-weighted: use plain counts from histogram2d for both syn and unweighted
+        if compute_l in ["cmd", "cmd_ccd"]:
+            hess_diag_cmd, _, _ = np.histogram2d(
+                mag, colors[0],
+                bins=[Nbins[0], Nbins[1]],
+                range=[[ranges[0][0], ranges[0][1]], [ranges[1][0], ranges[1][1]]]
+            )
+            syn_histo_f_parts += list(hess_diag_cmd.ravel())
+            unweighted_hist_parts += list(hess_diag_cmd.ravel())
+
+        if compute_l in ["ccd", "cmd_ccd"]:
+            hess_diag_ccd, _, _ = np.histogram2d(
+                colors[0], colors[1],
+                bins=[Nbins[1], Nbins[2]],
+                range=[[ranges[1][0], ranges[1][1]], [ranges[2][0], ranges[2][1]]]
+            )
+            syn_histo_f_parts += list(hess_diag_ccd.ravel())
+            unweighted_hist_parts += list(hess_diag_ccd.ravel())
+
+    syn_histo_f = np.array(syn_histo_f_parts, dtype=float)
+    unweighted_hist = np.array(unweighted_hist_parts, dtype=float)
+
+    # select non-empty bins (same indexing as observations)
     syn_histo_f_z = syn_histo_f[cl_z_idx]
+    unweighted_hist_z = unweighted_hist[cl_z_idx]
 
-    # Compute likelihood using Tremmel et al. (2013) formula
-    SumLogGamma = np.sum(
-        loggamma(cl_histo_f_z + syn_histo_f_z + 0.5) - loggamma(syn_histo_f_z + 0.5)
+    # Build weight factors: syn/unweighted where unweighted>0, else 1
+    weight_factors = np.ones_like(unweighted_hist, dtype=float)
+    nonzero_mask = unweighted_hist > 0
+    weight_factors[nonzero_mask] = syn_histo_f[nonzero_mask] / unweighted_hist[nonzero_mask]
+
+    # Apply weights to observed histogram (only z-indexed bins)
+    cl_histo_f_z_weighted = cl_histo_f_z * weight_factors[cl_z_idx]
+
+    # Tremmel likelihood using weighted observations and weighted synthetic model
+    tremmel_lkl_weighted = np.sum(
+        loggamma(cl_histo_f_z_weighted + syn_histo_f_z + 0.5) - loggamma(syn_histo_f_z + 0.5)
     )
 
-    # Compute final likelihood
-    tremmel_lkl = SumLogGamma - 0.693 * syn_histo_f_z.sum()
+    # Per-run maximum likelihood: compare weighted observations to themselves
+    tremmel_lkl_max_run = np.sum(
+        loggamma(cl_histo_f_z_weighted + cl_histo_f_z_weighted + 0.5) - loggamma(cl_histo_f_z_weighted + 0.5)
+    )
 
-    # Handle invalid max_lkl
-    if max_lkl == 0:
-         raise ValueError("max_lkl must be nonzero to avoid division errors.")
+    if tremmel_lkl_max_run <= 0:
+        if max_lkl > 0:
+            max_lkl_use = max_lkl
+        else:
+            raise ValueError("Computed per-run max_lkl is non-positive and provided max_lkl is not valid (>0).")
+    else:
+        max_lkl_use = tremmel_lkl_max_run
 
-    return 1 - tremmel_lkl / max_lkl
+    # # lengths
+    # len_cmd = Nbins[0] * Nbins[1]  # CMD: mag x color
+    # len_ccd = Nbins[1] * Nbins[2]  # CCD: color1 x color2
+    #
+    # # assume unweighted_hist is full concatenation [cmd.ravel(), ccd.ravel()]
+    # cmd_unweighted = unweighted_hist[:len_cmd]
+    # ccd_unweighted = unweighted_hist[len_cmd: len_cmd + len_ccd]
+    #
+    # # same for weighted (you used weighted = unweighted * weight_factors)
+    # full_weighted = unweighted_hist * weight_factors
+    # cmd_weighted = full_weighted[:len_cmd]
+    # ccd_weighted = full_weighted[len_cmd: len_cmd + len_ccd]
+    #
+    # # ranges:
+    # mag_range = [ranges[0][0], ranges[0][1]]
+    # color_range = [ranges[1][0], ranges[1][1]]
+    # color1_range = [ranges[1][0], ranges[1][1]]
+    # color2_range = [ranges[2][0], ranges[2][1]]
+    #
+    # plot_bin_weights_imshow(
+    #     cmd_unweighted, cmd_weighted,
+    #     x_range_cmd=mag_range, y_range_cmd=color_range, nbx_cmd=Nbins[0], nby_cmd=Nbins[1],
+    #     tremmel=tremmel_lkl_weighted, max_lk=tremmel_lkl_max_run,
+    #     unweighted_hist_ccd=ccd_unweighted, weighted_hist_ccd=ccd_weighted,
+    #     x_range_ccd=color1_range, y_range_ccd=color2_range, nbx_ccd=Nbins[1], nby_ccd=Nbins[2]
+    # )
+
+    return 1 - tremmel_lkl_weighted / max_lkl_use
+
+
 
 # def visual(cluster_dict, synth_clust):
 #     # If synthetic  cluster is empty, assign a small likelihood value.

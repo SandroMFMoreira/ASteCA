@@ -7,8 +7,11 @@ from catalogues import get_catalogue
 
 # Load data
 df = get_catalogue(['Dias'])[0]
-df = df[(df.r_sun < 400) & (df.age < 100)]
-cluster_names = df['cluster'].unique()
+df = df[(df.r_sun < 2000) & (df.age < 2000)]
+cluster_names = ['BH_99'] #df['cluster'].unique() # ['Alessi_2', 'Alessi_3', 'Alessi_24'] #
+
+#cluster_names = pd.read_csv('Dias_parsec_UBVRI_cmd_ccd/classif_parsec_UBVRI_cmd_ccd.csv')
+#cluster_names = cluster_names[cluster_names.age_classif == 'A'].cluster
 
 # Create directories if they don't exist
 config_dir = 'cluster_configs'
@@ -16,20 +19,20 @@ os.makedirs(config_dir, exist_ok=True)
 
 # Global config
 evolution_model = 'parsec'
-l_adjust        = 'ccd'
-phot_system     = 'Gaia'
+l_adjust        = 'cmd_ccd'
+phot_system     = 'UBVRI'
 av_fixed        = False
-results_dir = 'results_gaia/Plots'
+results_dir = f'Dias_{evolution_model}_{phot_system}_cmd_ccd_av_fixed/Plots/'
 os.makedirs(results_dir, exist_ok=True)
-results_name = "results_name"
+results_name = f"Dias_{evolution_model}_{phot_system}_cmd_ccd_av_fixed.csv"
 overwrite = False  # <-- SET THIS TO True to force rerun
+
 
 # If av_fixed, load the AV results once:
 if av_fixed:
-    av_df = pd.read_csv('ResultsAV.csv')
-    missing = set(cluster_names) - set(av_df['cluster'])
-    if missing:
-        raise ValueError(f"Caller error: AV values missing for clusters: {missing}")
+    av_df = pd.read_csv('Dias_parsec_UBVRI_cmd_ccd/Dias_parsec_UBVRI_cmd_ccd.csv')
+    available_clusters = set(av_df['cluster'])
+    cluster_names = [name for name in cluster_names if name in available_clusters]
 
 
 def run_cluster_fit(cluster_name):
@@ -59,7 +62,7 @@ def run_cluster_fit(cluster_name):
 
     # Run worker
     ret = subprocess.run(
-        ['python', 'age_inference.py', config_path],
+        ['python', '-u','age_inference.py', config_path],
         capture_output=True,
         text=True
     )

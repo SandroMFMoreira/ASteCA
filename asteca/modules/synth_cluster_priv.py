@@ -1,13 +1,13 @@
 import numpy as np
 from scipy import stats
 
-from .imfs import invTrnsfSmpl, sampleInv
+from .imfs import invTrnsfSmpl, sampleInv, get_imf
 
 
 def sample_imf(
     rng: np.random.Generator, IMF_name: str, max_mass: float, Nmets: int, Nages: int
-) -> tuple[list, list]:
-    """Returns arrays of sampled stars for the selected IMF.
+) -> tuple[list, list, list]:
+    """Returns arrays of sampled stars and their probabilities for the selected IMF.
 
     :param rng: Random number generator.
     :type rng: np.random.Generator
@@ -20,27 +20,37 @@ def sample_imf(
     :param Nages: Number of age values.
     :type Nages: int
 
-    :returns: A tuple containing two lists. The first list contains the sampled masses,
-     and the second list contains the ordered sampled masses.
-    :rtype: tuple[list, list]
+    :returns: A tuple containing three lists.
+        1. Sampled masses.
+        2. Ordered sampled masses.
+        3. Probabilities associated with each sampled mass (normalized PDF).
+    :rtype: tuple[list, list, list]
     """
     inv_cdf = invTrnsfSmpl(IMF_name)
 
-    # Sample in chunks until the maximum defined mass is reached. A simple
-    # analysis points to this being the optimal N_chunk
+    # Sample in chunks until the maximum defined mass is reached.
     N_chunk = max(100, int(max_mass / 40))
 
-    st_dist_mass, st_dist_mass_ordered = [], []
+    st_dist_mass, st_dist_mass_ordered, st_dist_probs = [], [], []
     for i in range(Nmets):
-        met_lst, met_lst_ord = [], []
+        met_lst, met_lst_ord, met_probs = [], [], []
         for j in range(Nages):
             sampled_IMF = sampleInv(rng, max_mass, inv_cdf, N_chunk)
+
+            # --- Compute probabilities (PDF values) ---
+            probs = get_imf(IMF_name, sampled_IMF)
+            # Normalize so that they sum to 1
+            probs /= np.sum(probs)
+
             met_lst.append(sampled_IMF)
             met_lst_ord.append(np.sort(sampled_IMF))
+            met_probs.append(probs)
+
         st_dist_mass.append(met_lst)
         st_dist_mass_ordered.append(met_lst_ord)
+        st_dist_probs.append(met_probs)
 
-    return st_dist_mass, st_dist_mass_ordered
+    return st_dist_mass, st_dist_mass_ordered, st_dist_probs
 
 
 def error_distribution(

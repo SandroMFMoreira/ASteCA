@@ -2,6 +2,7 @@ import numpy as np
 
 from .cluster import Cluster
 from .modules import likelihood_priv as lpriv
+import matplotlib.pyplot as plt
 
 
 class Likelihood:
@@ -69,12 +70,12 @@ class Likelihood:
             # Since the initial max_lkl=1, subtracting 1 inverts it back to the
             # original likelihood value
             self.max_lkl = 1 - self.get(
-                np.array([self.my_cluster.mag_v, *self.my_cluster.colors_v])
+                np.array([self.my_cluster.mag_v, *self.my_cluster.colors_v]), is_imf_weighted=False
             )
 
         print("\nLikelihood object generated")
 
-    def get(self, synth_clust: np.ndarray) -> float:
+    def get(self, synth_clust: np.ndarray, is_imf_weighted: bool = False) -> float:
         """Evaluate the selected likelihood function.
 
         :param synth_clust:  Numpy array containing the synthetic cluster. The shape of
@@ -88,6 +89,7 @@ class Likelihood:
         :return: Likelihood value
         :rtype: float
         """
+
         if self.lkl_name == "plr":
             return lpriv.tremmel(
                 self.ranges,
@@ -97,6 +99,7 @@ class Likelihood:
                 self.max_lkl,
                 synth_clust,
                 self.compute_l,
+                is_imf_weighted,
             )
         # if self.lkl_name == "visual":
         #     return lpriv.visual(self, synth_clust)

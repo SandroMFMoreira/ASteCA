@@ -60,7 +60,7 @@ class Synthetic:
         ext_law: str = "CCMO",
         DR_distribution: str = "uniform",
         IMF_name: str = "chabrier_2014",
-        max_mass: int = 20_000,
+        max_mass: int = 10_000,
         gamma: float | str = "D&K",
         seed: int | None = None,
         verbose: int = 1,
@@ -112,7 +112,7 @@ class Synthetic:
 
         # Sample the selected IMF
         Nmets, Nages = self.isochs.theor_tracks.shape[:2]
-        self.st_dist_mass, self.st_dist_mass_ordered = scp.sample_imf(
+        self.st_dist_mass, self.st_dist_mass_ordered, self.mass_prob = scp.sample_imf(
             self.rng, self.IMF_name, self.max_mass, Nmets, Nages
         )
 
@@ -336,6 +336,7 @@ class Synthetic:
         isoch_mass = scp.mass_interp(
             isoch_cut, self.m_ini_idx, self.st_dist_mass[ml][al], self.N_obs_stars
         )
+
         if not isoch_mass.any():
             return np.array([])
 
@@ -352,9 +353,19 @@ class Synthetic:
         # Assign errors according to errors distribution.
         synth_clust = scp.add_errors(isoch_binar, self.err_dist)
 
+        # --- Recalculate probabilities for the *final isochrone masses* ---
+        final_masses = synth_clust[self.m_ini_idx]  # take the actual mass dimension
+        mass_probs = scp.get_imf(self.IMF_name, final_masses)
+
+        ret_synth_clust = synth_clust[: self.m_ini_idx]
+
+        # Insert mass_probs at position self.m_ini_idx, shifting the rest to the right
+        ret_synth_clust = np.vstack([ret_synth_clust, mass_probs])
+
         if full_arr_flag:
             return synth_clust
-        return synth_clust[: self.m_ini_idx]
+
+        return ret_synth_clust
 
     def get_models(
         self,

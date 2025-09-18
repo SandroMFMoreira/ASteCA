@@ -1,4 +1,6 @@
 import os
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -50,6 +52,16 @@ phot_systs_data = {
             "comment_char": "#",
             "idx_col_line": -1,
     },
+    "MIXED":{
+            "col_names": {
+                "mass_col": "M/Ms",
+                "age_col": "Age",
+                "met_col": "Z",
+            },
+                "sep_cols": r"\s+",
+                "comment_char": "#",
+                "idx_col_line": -1,
+        },
 }
 
 
@@ -111,6 +123,7 @@ def load(
     isochrones = interp_df(N_interp, met_age_vals, isoch_dataframes)
 
     isochrones, met_age_arr = merge_ps_massini_check(mass_col, isochrones)
+
     try:
         np.shape(isochrones)
     except ValueError:
@@ -300,7 +313,7 @@ def read(
             met_age_vals.append([met, age])
             isoch_dataframes.append(df_file_path[cols_keep_ps].astype(float))
 
-        elif model == "BARAFFE":
+        elif (model == "BARAFFE") or (model == "MIXED"):
             # Group by age
             age_blocks = df_file_path.groupby(age_col, sort=False)
 
@@ -336,6 +349,9 @@ def get_header(model: str, file_path: str) -> tuple[list, list]:
             if not line.startswith(phot_systs_data[model]["comment_char"]):
                 break
             full_header.append(line)
+
+
+    print(full_header, file_path)
 
     # Extract column names
     column_line = full_header[phot_systs_data[model]["idx_col_line"]]

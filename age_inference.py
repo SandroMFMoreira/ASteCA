@@ -29,7 +29,7 @@ bands = ['U', 'B', 'V', 'R', 'I', 'J', 'H', 'K', 'G', 'G_BP', 'G_RP']
 eff_lambda_df = pd.DataFrame([lambdas], columns=bands)
 
 def load_isochrones(evolution_model, phot_system):
-    if evolution_model == 'baraffe':
+    if (evolution_model == 'baraffe') or (evolution_model == 'mixed'):
         if phot_system == 'Gaia':
             iso_path = "./Isochrones/BHAC15_iso.txt"
             magnitude = "G"
@@ -46,23 +46,33 @@ def load_isochrones(evolution_model, phot_system):
             )
 
         elif phot_system == 'UBVRI':
-            iso_path = "./Isochrones/BHAC15_iso_UBVRI.txt"
+            if evolution_model == 'baraffe':
+                iso_path = "./Isochrones/BHAC15_iso_UBVRI.txt"
+                color2 = None
+                color_effl2 = None
+            else:
+                iso_path = "./Isochrones/mixed_UBVRI.txt"
+                color2 = ("U", "B")
+                color_effl2 = (
+                    eff_lambda_df["U"].values,
+                    eff_lambda_df["B"].values
+                )
             magnitude = "Mv"
             color1 = ("Mv", "Mi")
-            color2 = None
+
             mag_effl = eff_lambda_df["V"].values
             color_effl1 = (
                 eff_lambda_df['V'].values,
                 eff_lambda_df['I'].values
             )
-            color_effl2 = None
+
 
         else:
             raise ValueError("phot_system must be 'Gaia' or 'UBVRI'")
 
     elif evolution_model == 'parsec':
         if phot_system == 'Gaia':
-            iso_path = "./Isochrones/IsochronesParsecGaia.dat"
+            iso_path = "./Isochrones/combined_isochrones.dat"
             magnitude = "Gmag"
             color1 = ("G_BPmag", "G_RPmag")
             color2 = ("Gmag", "G_RPmag")
@@ -119,7 +129,8 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
         'cluster': [cluster_name],
         'distance': [None],  # Placeholder, will be updated
         'age': [None],
-        'av': [None]
+        'av': [None],
+        'lk_dist': [None]
     })
 
     parallax = np.nanmedian(cluster_df["plx"])
@@ -127,27 +138,31 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
     # sigma_parallax = np.std(cluster_df["plx"])
     dm = round(-5 * np.log10(parallax) + 10, 3)
 
+    # Define parameter priors
+    loga_min, loga_max = 6, 10  # ~1Myr - 320Myr
+
     # Av
     if av_fixed:
         fix_params = {"alpha": 0.09, "beta": 0.94, "Rv": 3.1, "DR": 0., "met": 0.0152, "dm": dm, 'Av': cluster_av}
+        priors = pyabc.Distribution(
+            {
+                "loga": pyabc.RV("uniform", loga_min, loga_max - loga_min),
+            }
+        )
     else:
         fix_params = {"alpha": 0.09, "beta": 0.94, "Rv": 3.1, "DR": 0., "met": 0.0152, "dm": dm}
+        av_min, av_max = 0, 2
+        priors = pyabc.Distribution(
+            {
+                "loga": pyabc.RV("uniform", loga_min, loga_max - loga_min),
+                "Av": pyabc.RV("uniform", av_min, av_max - av_min),
+            }
+        )
 
     synthcl.calibrate(my_cluster, fix_params)
 
     # Likelihood
-    likelihood = asteca.likelihood(my_cluster, compute_l=l_adjust)
-
-    # Define parameter priors
-    loga_min, loga_max = 6, 8.5  # ~1Myr - 320Myr
-    av_min, av_max = 0, 2
-
-    priors = pyabc.Distribution(
-        {
-            "loga": pyabc.RV("uniform", loga_min, loga_max - loga_min),
-            "Av": pyabc.RV("uniform", av_min, av_max - av_min),
-        }
-    )
+    likelihood = asteca.likelihood(my_cluster, compute_l=l_adjust, bin_method='fixed')
 
     def model(fit_params):
         """Generate synthetic cluster. pyABC expects a dictionary from this
@@ -176,7 +191,15 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
     db_path = "sqlite:///" + os.path.abspath(os.path.join("abc_dbs", f"pyABC_{cluster_name}.db"))
     abc.new(db_path)
 
-    history = abc.run(minimum_epsilon=0.01, max_nr_populations=15)
+    history = abc.run(minimum_epsilon=0.01, max_nr_populations=20)
+
+    final_dist = pyabc.inference_util.eps_from_hist(history)
+
+    # plt.plot(history.get_all_populations()['epsilon'],)
+    # plt.title(min(history.get_all_populations()['epsilon']))
+    # plt.show()
+
+    cluster_results.loc[0, 'lk_dist'] = final_dist
 
     # Extract results
     df_results, weights = history.get_distribution()
@@ -218,7 +241,6 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
     with PdfPages(pdf_filename) as pdf:
 
         if len(df.keys()) > 1:
-
             # Matrix of 1d and 2d histograms over all parameters
             pyabc.visualization.plot_histogram_matrix(history)
             pdf.savefig()
@@ -237,8 +259,8 @@ def process_cluster(cluster_name, cluster_df, synthcl, my_cluster, l_adjust, av_
         axes[0].plot(iso_final[1, :], iso_final[0, :], color='black')
 
         # CCD plot (only the cluster, no isochrone if color2 is None)
-        asteca.plot.cluster(my_cluster, axes[1], col_plot="ccd")
         if synthcl.isochs.color2 is not None:
+            asteca.plot.cluster(my_cluster, axes[1], col_plot="ccd")
             axes[1].plot(iso_final[1, :], iso_final[2, :], color='black')
 
         plt.suptitle(label)
@@ -296,6 +318,7 @@ def main():
 
     # Read and filter cluster data
     df = pd.read_csv("dias_dr3_0.5.csv")
+    #df = pd.read_csv("/home/sandro/PycharmProjects/OCs-ScaleHeight-Evolution_rep/LargeFiles/Hunt/members_Hunt_dr3_50.csv")
     cluster_df = df[df["cluster"] == cluster_name]
     cluster_df = cluster_df[cluster_df["pmemb"] > 0.5]
 
@@ -321,7 +344,8 @@ def main():
             obs_df=cluster_df,
             magnitude="Vmag", e_mag="e_Vmag",
             color="Vmag-Imag",  e_color="e_Vmag-Imag",
-            color2="Umag-Bmag", e_color2="e_Umag-Bmag",
+            color2=None if evolution_model == 'baraffe' else "Umag-Bmag",
+            e_color2=None if evolution_model == 'baraffe' else "e_Umag-Bmag",
         )
 
     # Delegate to the refactored process_cluster
