@@ -71,13 +71,15 @@ def launch_instance(pdf_folder, csv_file, k, port=None, title=None, headless=Tru
 if __name__ == "__main__":
     # ====== configure the instances you want to launch ======
     instances = [
-        {"pdf_folder": "./Dias_parsec_UBVRI_cmd_ccd/", "csv_file": "classif_parsec_UBVRI_cmd_ccd.csv", "title": "Parsec"},
+        #{"pdf_folder": "./Sandro_parsec_UBVRI_cmd_ccd_kde/", "csv_file": "classif_parsec_Gaia_cmd_ccd.csv", "title": "Parsec"},
+        {"pdf_folder": "./Dias_parsec_UBVRI_cmd_ccd_kde/", "csv_file": "classif_parsec_Gaia_cmd_ccd.csv", "title": "Parsec"},
+        # {"pdf_folder": "./Sandro_baraffe_Gaia_cmd_ccd_kde/", "csv_file": "classif_baraffe_Gaia_cmd_ccd.csv", "title": "Baraffe"},
+        # {"pdf_folder": "./Sandro_mixed_UBVRI_cmd_ccd_kde/", "csv_file": "classif_mixed_UBVRI_cmd_ccd.csv",
+        #  "title": "Mixed"}
         #{"pdf_folder": "./Dias_baraffe_UBVRI_cmd_av_fixed/", "csv_file": "classif_baraffe_UBVRI_cmd_av_fixed.csv", "title": "Baraffe"},
         #{"pdf_folder": "./Dias_baraffe_UBVRI_cmd_av_fixed_bins_fixed/", "csv_file": "classif_baraffe_UBVRI_cmd_av_fixed_bins_fixed.csv",
         # "title": "Baraffe Bins fixed"},
         #{"pdf_folder": "Dias_baraffe_Gaia_cmd_av_fixed_bins_fixed", "csv_file": "classif_baraffe_Gaia_cmd_av_fixed_bins_fixed.csv",}
-        {"pdf_folder": "./Dias_mixed_UBVRI_cmd_ccd_av_fixed/", "csv_file": "classif_",
-         "title": "mixed"}
     ]
     procs = []
     try:

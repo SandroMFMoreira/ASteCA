@@ -26,6 +26,7 @@ def sample_imf(
         3. Probabilities associated with each sampled mass (normalized PDF).
     :rtype: tuple[list, list, list]
     """
+
     inv_cdf = invTrnsfSmpl(IMF_name)
 
     # Sample in chunks until the maximum defined mass is reached.
@@ -225,7 +226,8 @@ def ccmo_ext_coeffs(
     return ext_coefs
 
 
-def ccmo_model(mw: float) -> tuple[float, float]:
+def ccmo_model(mw: float) \
+        -> tuple[float, float]:
     """Cardelli, Clayton, and Mathis (1989 ApJ. 345, 245) model for extinction
     coefficients with updated coefficients for near-UV from O'Donnell
     (1994, ApJ, 422, 158).
@@ -845,10 +847,14 @@ def extinction(
         ec_col1 = (ext_coefs[1][0][0] + ext_coefs[1][0][1] / Rv) - (
             ext_coefs[1][1][0] + ext_coefs[1][1][1] / Rv
         )
+        ec_col2 = (ext_coefs[2][0][0] + ext_coefs[2][0][1] / Rv) - (
+                ext_coefs[2][1][0] + ext_coefs[2][1][1] / Rv
+        )
     elif ext_law == "GAIADR3":
         # If this model is used the first color is always expected to be BP-RP
         # BP_RP = isochrone[1]
-        ec_mag, ec_col1 = dustapprox(isochrone[1], Av_dr)
+        ec_mag, ec_col1 = dustapprox(isochrone[1], Av_dr, color='BP_RP')
+        ec_mag, ec_col2 = dustapprox(isochrone[1], Av_dr, color='G_RP')
     else:
         raise ValueError(f"Unknown extinction law: {ext_law}")
 
@@ -856,43 +862,30 @@ def extinction(
     isochrone[0] += Ax
     Ex1 = ec_col1 * Av_dr
     isochrone[1] += Ex1
+    Ex2 = ec_col2 * Av_dr
+    isochrone[2] += Ex2
 
     # Move binary data.
     if binar_flag:
         isochrone[m_ini_idx + 1] += Ax  # Magnitude
         isochrone[m_ini_idx + 2] += Ex1  # First color
-
-    # Second color
-    if len(ext_coefs) > 2:
-        ec_col2 = (ext_coefs[2][0][0] + ext_coefs[2][0][1] / Rv) - (
-            ext_coefs[2][1][0] + ext_coefs[2][1][1] / Rv
-        )
-        Ex2 = ec_col2 * Av_dr
-        isochrone[2] += Ex2
-        # Move color with binary data.
-        if binar_flag:
-            isochrone[m_ini_idx + 3] += Ex2
+        isochrone[m_ini_idx + 3] += Ex2
 
     return isochrone
 
 
-def dustapprox(
-    X_: np.ndarray, Av_dr: float | np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def dustapprox(X_: np.ndarray, Av_dr: float | np.ndarray, color: str = "BP_RP") -> tuple[np.ndarray, np.ndarray]:
     """
-    The 'coeffs' values are the main sequence values taken from:
-    https://www.cosmos.esa.int/web/gaia/edr3-extinction-law
+    Compute extinction coefficients following the Gaia EDR3 extinction-law polynomials.
 
-    The order of the coefficients is:
-    Intercept   X   X2  X3  A   A2  A3  XA  AX2 XA2
-
-    :param X_: Array of BP-RP colors.
-    :type X_: np.ndarray
-    :param Av_dr: Total absorption (eventually containing differential reddening).
-    :type Av_dr: float | np.ndarray
-
-    :returns: Extinction coefficients for G and BP-RP.
-    :rtype: tuple[np.ndarray, np.ndarray]
+    Notes
+    -----
+    - The polynomial is expressed as a function of BP-RP color (X_). So **X_ must be BP-RP**.
+      If you pass X_ as a different color (e.g. G-RP) the results will be wrong for the polynomials.
+    - Returns (ec_G, ec_color) where:
+        ec_G     = A_G / A_V
+        ec_color = E(color) / A_V  (E(BP-RP) or E(G-RP) depending on `color`)
+    - Supported `color` values: "BP_RP", "G_RP"
     """
     coeffs = {
         "G": (
@@ -903,9 +896,9 @@ def dustapprox(
             -0.0377160263914123,
             0.00151347495244888,
             -2.52364537395142e-05,
-            0.0114522658102451,
-            -0.000936914989014318,
-            -0.000260296774134201,
+            0.0114522658102451,    # XA  (X*A)
+            -0.000936914989014318, # AX2 (A*X^2)  -- ordering as in your comment
+            -0.000260296774134201, # XA2 (X*A^2)
         ),
         "BP": (
             1.15363197483424,
@@ -933,33 +926,46 @@ def dustapprox(
         ),
     }
 
-    X_2 = X_**2
-    X_3 = X_**3
-    Av_2 = Av_dr**2
-    Av_3 = Av_dr**3
+    # ensure numpy arrays for broadcasting
+    X_ = np.asarray(X_)
+    Av_dr = np.asarray(Av_dr)
 
-    def ext_coeff(k):
-        """
-        https://www.cosmos.esa.int/web/gaia/edr3-extinction-law
-        """
-        # X   X2  X3  A   A2  A3  XA  AX2 XA2
-        ay = coeffs[k][0]
-        for i, Xk in enumerate([X_, X_2, X_3]):
-            ay += coeffs[k][1 + i] * Xk
-        for i, Ak in enumerate([Av_dr, Av_2, Av_3]):
-            ay += coeffs[k][4 + i] * Ak
+    X2 = X_ ** 2
+    X3 = X_ ** 3
+    Av2 = Av_dr ** 2
+    Av3 = Av_dr ** 3
 
-        ay += (
-            coeffs[k][7] * X_ * Av_dr
-            + coeffs[k][9] * X_ * Av_2  # This index not a mistake
-            + coeffs[k][8] * X_2 * Av_dr
+    def ext_coeff(band: str) -> np.ndarray:
+        c = coeffs[band]
+        # Intercept + X terms + A terms
+        ay = (
+            c[0]
+            + c[1] * X_
+            + c[2] * X2
+            + c[3] * X3
+            + c[4] * Av_dr
+            + c[5] * Av2
+            + c[6] * Av3
         )
+        # cross-terms in the order from your comment: XA, AX2, XA2
+        ay += c[7] * (X_ * Av_dr)      # XA
+        ay += c[8] * (Av_dr * X2)      # AX2 (A * X^2) -- commutes with X2*Av_dr
+        ay += c[9] * (X_ * Av2)        # XA2 (X * A^2)
         return ay
 
     ec_G = ext_coeff("G")
-    ec_BPRP = ext_coeff("BP") - ext_coeff("RP")
 
-    return ec_G, ec_BPRP
+    if color == "BP_RP":
+        ec_color = ext_coeff("BP") - ext_coeff("RP")
+    elif color == "G_RP":
+        # E(G-RP)/A_V = A_G/A_V - A_RP/A_V
+        # use ec_G already computed to avoid tiny re-evaluation differences
+        ec_color = ec_G - ext_coeff("RP")
+    else:
+        raise ValueError("color must be 'BP_RP' or 'G_RP' (input X_ must be BP-RP).")
+
+    return ec_G, ec_color
+
 
 
 def cut_max_mag(isoch_moved: np.ndarray, max_mag_syn: float) -> np.ndarray:

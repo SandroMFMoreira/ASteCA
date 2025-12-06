@@ -83,7 +83,7 @@ class Isochrones:
         color_effl: tuple | None = None,
         color2_effl: tuple | None = None,
         z_to_FeH: float | None = None,
-        N_interp: int = 2500,
+        N_interp: int = 10000,
         parsec_rm_stage_9: bool = True,
         column_names: dict | None = None,
         verbose: int = 1,

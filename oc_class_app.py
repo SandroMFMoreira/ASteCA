@@ -4,6 +4,26 @@ import pandas as pd
 import base64
 import argparse
 import sys
+from catalogues import get_catalogue
+
+# --- Load classification catalogue ---
+df_classif = pd.read_csv('./Dias_parsec_UBVRI_cmd_ccd_kde/classif_parsec_Gaia_cmd_ccd.csv')
+
+# Clusters with classification not equal to 'A'
+clusters_non_A = set(df_classif.loc[(df_classif["age_classif"] != "A") & (df_classif["age_classif"] != "B"), "cluster"].unique())
+
+# --- Load Dias catalogue ---
+df_dias = get_catalogue(['Dias'])[0]
+df_dias = df_dias[(df_dias.r_sun < 1500) & (df_dias.age < 300)]
+clusters_hunt = set(df_dias['cluster'].unique())
+
+# --- Clusters that appear in Hunt but NOT in any classification ---
+clusters_with_classif = set(df_classif['cluster'].unique())
+clusters_hunt_only = clusters_hunt - clusters_with_classif
+
+# --- Final selection set ---
+allowed_clusters = clusters_non_A.union(clusters_hunt_only)
+
 
 # parse args passed after '--' in the `streamlit run` command
 parser = argparse.ArgumentParser(add_help=False)
@@ -55,15 +75,19 @@ if "df" not in st.session_state:
     st.session_state["df"] = load_or_init_df(CSV_FILE)
     st.session_state["last_saved"] = ""
 
-# === Collect PDFs (alphabetical) ===
 pdf_files = sorted([f for f in os.listdir(PDF_FOLDER) if f.lower().endswith(".pdf")])
-clusters = [os.path.splitext(f)[0] for f in pdf_files]
+all_clusters = [os.path.splitext(f)[0] for f in pdf_files]
+
+# Filter only those clusters that meet your condition
+clusters = [c for c in all_clusters if c in allowed_clusters]
 
 # ensure all clusters exist in df
 df = st.session_state["df"]
 for c in clusters:
     if c not in df["cluster"].values:
         df = pd.concat([df, pd.DataFrame([[c, None, None]], columns=["cluster", "age_classif", "av_classif"])], ignore_index=True)
+
+
 # keep df ordered by cluster to stay consistent
 df = df.drop_duplicates(subset=["cluster"], keep="first").reset_index(drop=True)
 st.session_state["df"] = df

@@ -1,8 +1,6 @@
 import numpy as np
-
 from .cluster import Cluster
 from .modules import likelihood_priv as lpriv
-import matplotlib.pyplot as plt
 
 
 class Likelihood:
@@ -34,12 +32,20 @@ class Likelihood:
     """
 
     def __init__(
-        self, my_cluster: Cluster, lkl_name: str = "plr", bin_method: str = "knuth", compute_l: str = 'cmd'
+            self,
+            my_cluster: Cluster,
+            lkl_name: str = "plr",
+            bin_method: str = "knuth",
+            compute_l: str = "cmd",
+            use_kde: bool = False,
+            model: str = None,
     ) -> None:
         self.my_cluster = my_cluster
         self.lkl_name = lkl_name
         self.bin_method = bin_method
         self.compute_l = compute_l
+        self.use_kde = use_kde
+        self.model = model
 
         likelihoods = ("plr", "bins_distance", "chisq")
         if self.lkl_name not in likelihoods:
@@ -47,64 +53,61 @@ class Likelihood:
                 f"'{self.lkl_name}' not recognized. Should be one of {likelihoods}"
             )
 
-        # Validate compute_l flag
         valid_flags = {"cmd", "ccd", "cmd_ccd"}
         if compute_l not in valid_flags:
-            raise ValueError(f"Invalid value for 'compute_l': '{compute_l}'. Must be one of {valid_flags}.")
+            raise ValueError(
+                f"Invalid value for 'compute_l': '{compute_l}'. Must be one of {valid_flags}."
+            )
 
         bin_methods = ("knuth", "blocks", "scott", "freedman", "fixed")
         if self.bin_method not in bin_methods:
             raise ValueError(
-                f"Binning '{self.bin_method}' not recognized. "
-                + f"Should be one of {bin_methods}"
+                f"Binning '{self.bin_method}' not recognized. Should be one of {bin_methods}"
             )
 
-        # Obtain data used by the ``likelihood.get()`` method
-        self.ranges, self.Nbins, self.cl_z_idx, self.cl_histo_f_z = lpriv.lkl_data(
-            bin_method, my_cluster.mag_v, my_cluster.colors_v, compute_l
-        )
+        if self.use_kde:
+            # Store observed data for KDE likelihood evaluation
+            self.obs_data = {
+                "obs_mag": my_cluster.mag_v,
+                "obs_e_mag": my_cluster.e_mag_v,
+                "obs_colors": my_cluster.colors_v,
+                "obs_e_colors": my_cluster.e_colors_v,
+                # Optionally: "obs_mass": my_cluster.mass_probs if available
+            }
+        else:
+            # Use original histogram-based method
+            self.ranges, self.Nbins, self.cl_z_idx, self.cl_histo_f_z = lpriv.lkl_data(
+                bin_method, my_cluster.mag_v, my_cluster.colors_v, compute_l
+            )
 
-        self.max_lkl = 1
+        self.max_lkl = 1.0
+
         if self.lkl_name == "plr":
-            # Evaluate cluster against itself to obtain the maximum likelihood.
-            # Since the initial max_lkl=1, subtracting 1 inverts it back to the
-            # original likelihood value
             self.max_lkl = 1 - self.get(
-                np.array([self.my_cluster.mag_v, *self.my_cluster.colors_v]), is_imf_weighted=False
+                np.array([self.my_cluster.mag_v, *self.my_cluster.colors_v]),
+                is_imf_weighted=False
             )
 
-        print("\nLikelihood object generated")
+        print("\nLikelihood object generated (use_kde={})".format(self.use_kde))
 
-    def get(self, synth_clust: np.ndarray, is_imf_weighted: bool = False) -> float:
-        """Evaluate the selected likelihood function.
-
-        :param synth_clust:  Numpy array containing the synthetic cluster. The shape of
-            this array must be: ``[magnitude, color1, (color2)]``, where ``magnitude``
-            and ``color`` are arrays with the magnitude and color photometric data
-            (``color2`` is the optional second color defined)
-        :type synth_clust: np.ndarray
-
-        :raise ValueError: If the likelihood function is not recognized
-
-        :return: Likelihood value
-        :rtype: float
-        """
-
+    def get(self, synth_clust: np.ndarray, is_imf_weighted: bool = False, rmv_contam: bool = False, penalty: bool = True) -> float:
+        """Evaluate the selected likelihood function."""
         if self.lkl_name == "plr":
-            return lpriv.tremmel(
-                self.ranges,
-                self.Nbins,
-                self.cl_z_idx,
-                self.cl_histo_f_z,
-                self.max_lkl,
-                synth_clust,
-                self.compute_l,
-                is_imf_weighted,
-            )
-        # if self.lkl_name == "visual":
-        #     return lpriv.visual(self, synth_clust)
-        # if self.lkl_name == "mean_dist":
-        #     return lpriv.mean_dist(self, synth_clust)
+            if self.use_kde:
+                # return lpriv.knn_likelihood(self.obs_data, synth_clust, compute_l=self.compute_l, rmv_contam=rmv_contam, model=self.model, penalty=penalty)
+
+                return lpriv.kde_distance(self.obs_data, synth_clust, self.compute_l, rmv_contam=rmv_contam, penalty=penalty)
+            else:
+                return lpriv.tremmel(
+                    self.ranges,
+                    self.Nbins,
+                    self.cl_z_idx,
+                    self.cl_histo_f_z,
+                    self.max_lkl,
+                    synth_clust,
+                    self.compute_l,
+                    is_imf_weighted,
+                )
         elif self.lkl_name == "bins_distance":
             return lpriv.bins_distance(
                 self.my_cluster.mag_v, self.my_cluster.colors_v, synth_clust
@@ -115,3 +118,4 @@ class Likelihood:
             )
         else:
             raise ValueError(f"Likelihood '{self.lkl_name}' not recognized")
+

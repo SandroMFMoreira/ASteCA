@@ -60,10 +60,11 @@ class Synthetic:
         ext_law: str = "CCMO",
         DR_distribution: str = "uniform",
         IMF_name: str = "chabrier_2014",
-        max_mass: int = 10_000,
+        max_mass: int = 100_000,
         gamma: float | str = "D&K",
         seed: int | None = None,
         verbose: int = 1,
+
     ) -> None:
         self.isochs = isochs
         self.ext_law = ext_law
@@ -171,7 +172,7 @@ class Synthetic:
         if self.verbose > level:
             print(mssg)
 
-    def calibrate(self, cluster: Cluster, fix_params: dict = {}):
+    def calibrate(self, cluster: Cluster, fix_params: dict = {}, n_points: int = 1):
         """Calibrate a :py:class:`Synthetic` object based on a
         :py:class:`Cluster <asteca.cluster.Cluster>` object and a dictionary of fixed
         fundamental parameters (``fix_params``).
@@ -222,7 +223,12 @@ class Synthetic:
             self.m_ini_idx = 3  # (0->mag, 1->color, 2->color2, 3->mass_ini)
 
         self.max_mag_syn = max(cluster.mag_v)
-        self.N_obs_stars = len(cluster.mag_v)
+
+        if n_points == 1:
+            self.N_obs_stars = max(5000,  len(cluster.mag_v))
+        else:
+            self.N_obs_stars = n_points
+
         self.err_dist = scp.error_distribution(
             cluster.mag_v,
             cluster.e_mag_v,
@@ -258,6 +264,11 @@ class Synthetic:
                         f"Parameter {par}={self.fix_params[par]} out of range: [{pmin} - {pmax}]"
                     )
 
+        # Used by the `cluster_masses()` method
+        self.cluster_ra = cluster.obs_df[cluster.ra]
+        self.cluster_dec = cluster.obs_df[cluster.dec]
+        self.colors2 = cluster.obs_df[cluster.color2].values
+
     def generate(
         self, fit_params: dict, plot_flag: bool = False, full_arr_flag: bool = False
     ) -> np.ndarray:
@@ -286,6 +297,7 @@ class Synthetic:
             dimension(s). This changes depending on the flags above.
         :rtype: np.ndarray
         """
+
 
         # Return proper values for fixed parameters and parameters required
         # for the (z, log(age)) isochrone averaging.
@@ -350,8 +362,12 @@ class Synthetic:
             isoch_mass,
         )
 
-        # Assign errors according to errors distribution.
-        synth_clust = scp.add_errors(isoch_binar, self.err_dist)
+        # if self.N_obs_stars == int(10_000):
+        #     synth_clust = isoch_binar
+        # else:
+        #     synth_clust = scp.add_errors(isoch_binar, self.err_dist)
+
+        synth_clust = isoch_binar
 
         # --- Recalculate probabilities for the *final isochrone masses* ---
         final_masses = synth_clust[self.m_ini_idx]  # take the actual mass dimension
@@ -371,7 +387,7 @@ class Synthetic:
         self,
         model: dict[str, float],
         model_std: dict[str, float],
-        N_models: int = 200,
+        N_models: int = 20,
     ) -> None:
         """Generate random sampled models from the selected solution. Use these models
         to generate full synthetic clusters.
@@ -522,7 +538,6 @@ class Synthetic:
 
     def cluster_masses(
         self,
-        radec_c: tuple[float, float] | None = None,
         rho_amb: float | None = None,
         M_B: float = 2.5e10,
         r_B: float = 0.5e3,
@@ -611,6 +626,9 @@ class Synthetic:
                 "No models were generated. Run the `get_models()` method before "
                 + "estimating the cluster masses."
             )
+
+        # Estimate the center coordinates from the cluster's median values
+        radec_c = (np.median(self.cluster_ra), np.median(self.cluster_dec) ) # pyright: ignore
 
         # Number of observed stars
         N_obs = len(self.mag_v)

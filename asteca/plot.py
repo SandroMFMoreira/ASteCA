@@ -49,6 +49,7 @@ def cluster(
         color_idx: int = 0,
         binar_probs: np.ndarray | None = None,
         prob_binar_cut: float = 0.5,
+        contamination_mask: np.ndarray | None = None,
 ) -> Axes:
     """Generate a color-magnitude plot or color-color diagram based on the specified parameters.
 
@@ -70,6 +71,8 @@ def cluster(
     :param prob_binar_cut: Probabilities value that separates single systems from
         binary systems; defaults to ``0.5``
     :type prob_binar_cut: float
+    :param contamination_mask: Boolean array marking contaminated stars (True = contaminated)
+    :type contamination_mask: np.ndarray | None
 
     :raises ValueError: If ``color_idx`` is not ``0`` or ``1``
 
@@ -93,14 +96,21 @@ def cluster(
         else:
             # Prepare the data for binary classification
             msk_binar = binar_probs > prob_binar_cut
-            ax.scatter(cluster.colors_v[color_idx][~msk_binar], cluster.mag_v[~msk_binar], c="grey", marker="o",
-                       alpha=0.5,
+            ax.scatter(cluster.colors_v[color_idx][~msk_binar], cluster.mag_v[~msk_binar],
+                       c="grey", marker="o", alpha=0.5,
                        label=f"Observed (single), N={len(cluster.mag_v[~msk_binar])}")
-            ax.scatter(cluster.colors_v[color_idx][msk_binar], cluster.mag_v[msk_binar], c=binar_probs[msk_binar],
-                       marker="s",
-                       alpha=0.5, label=f"Observed (binary), N={len(cluster.mag_v[msk_binar])}")
+            ax.scatter(cluster.colors_v[color_idx][msk_binar], cluster.mag_v[msk_binar],
+                       c=binar_probs[msk_binar], marker="s", alpha=0.5,
+                       label=f"Observed (binary), N={len(cluster.mag_v[msk_binar])}")
+
+        # Overlay contamination if provided
+        if contamination_mask is not None:
+            ax.scatter(cluster.colors_v[color_idx][contamination_mask],
+                       cluster.mag_v[contamination_mask],
+                       c="red", marker="x", label="Contamination")
 
         ax.set_ylim(max(cluster.mag_v) + 0.5, min(cluster.mag_v) - 1)
+        ax.set_xlim(min(cluster.colors_v[0]) - 0.15, max(cluster.colors_v[0]) + 0.15)
         ax.set_xlabel(cluster.color if cluster.color else "Color1")
         ax.set_ylabel(cluster.magnitude)
         ax.legend()
@@ -119,32 +129,36 @@ def cluster(
             ax.set_ylabel(cluster.color if cluster.color else "Color1")
 
         if binar_probs is None:
-            # Plot all stars as a single group
             ax.scatter(x, y, c="blue", alpha=0.5, label="Observed")
         else:
-            # Classify single vs. binary systems
             msk_binar = binar_probs > prob_binar_cut
-            ax.scatter(x[~msk_binar], y[~msk_binar], c="grey", marker="o", alpha=0.5,
+            ax.scatter(x[~msk_binar], y[~msk_binar],
+                       c="grey", marker="o", alpha=0.5,
                        label=f"Observed (single), N={len(x[~msk_binar])}")
-            ax.scatter(x[msk_binar], y[msk_binar], c=binar_probs[msk_binar], marker="s", alpha=0.5,
+            ax.scatter(x[msk_binar], y[msk_binar],
+                       c=binar_probs[msk_binar], marker="s", alpha=0.5,
                        label=f"Observed (binary), N={len(x[msk_binar])}")
+
+        # Overlay contamination if provided
+        if contamination_mask is not None:
+            ax.scatter(x[contamination_mask], y[contamination_mask],
+                       c="red", marker="x", label="Contamination")
 
         ax.legend()
         ax.invert_yaxis()
 
     # Handle plot types
     if col_plot == "cmd":
-        plot_cmd()  # Plot only CMD
+        plot_cmd()
         return ax
-
     elif col_plot == "ccd":
         if len(cluster.colors_v) < 2:
             raise ValueError("Cannot generate CCD plot: At least two colors are required, but only one was provided.")
-        plot_ccd()  # Plot only CCD
+        plot_ccd()
         return ax
-
     else:
         raise ValueError(f"Invalid value for 'col_plot': '{col_plot}'. Must be 'cmd' or 'ccd'.")
+
 
 
 def synthetic(

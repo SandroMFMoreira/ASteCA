@@ -1,7 +1,7 @@
 # Ignore folders starting with "Results" or "junk"
 cluster_configs/
 Results*/
-junk*/
+abc_dbs/
 
 # Ignore Python bytecode and Jupyter autosaves
 *.pyc

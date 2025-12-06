@@ -4,20 +4,19 @@ from scipy.special import loggamma
 import matplotlib.pyplot as plt
 from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import StandardScaler
+from typing import Tuple, Sequence, Dict, Any, Union
+from sklearn.neighbors import NearestNeighbors
 import numpy as np
+from matplotlib.patches import Circle
 from matplotlib.colors import LogNorm
 from scipy.spatial import cKDTree as CKDTree
 
 
-def nn_loglik(obs_pts, obs_errs, syn_pts, weights=None, k=5, eps=1e-5,
-              return_per_point=False, model=None):
+def nn_loglik(obs_pts, obs_errs, syn_pts, weights=None, k=5, eps=1e-5, return_per_point=False):
     """
     Nearest-neighbour based log-likelihood using scipy.spatial.cKDTree.
     Returns either the per-point vector or the summed scalar.
     Enforces a minimum distance threshold (default=0.01).
-
-    If model == 'baraffe', restricts obs_pts to the bounding box
-    defined by syn_pts (min/max in each dimension).
     """
     obs_pts = np.asarray(obs_pts, dtype=float)
     obs_errs = np.asarray(obs_errs, dtype=float)
@@ -27,16 +26,6 @@ def nn_loglik(obs_pts, obs_errs, syn_pts, weights=None, k=5, eps=1e-5,
         raise ValueError("obs_pts and syn_pts must be 2D arrays (N, ndim)")
     if obs_pts.shape[1] != syn_pts.shape[1]:
         raise ValueError("obs_pts and syn_pts must have same number of dimensions")
-
-    # Restrict to Baraffe domain if requested
-    if model == 'baraffe':
-        mins = syn_pts.min(axis=0)
-        maxs = syn_pts.max(axis=0)
-        mask = np.all((obs_pts >= mins) & (obs_pts <= maxs), axis=1)
-        obs_pts = obs_pts[mask]
-        obs_errs = obs_errs[mask]
-        if obs_pts.size == 0:
-            raise ValueError("No obs_pts fall within Baraffe synthetic domain")
 
     tree = CKDTree(syn_pts)
     dists, idx = tree.query(obs_pts, k=k)
@@ -49,8 +38,10 @@ def nn_loglik(obs_pts, obs_errs, syn_pts, weights=None, k=5, eps=1e-5,
         dists = np.asarray(dists)
         idx = np.asarray(idx)
 
-    avg_dists = dists.mean(axis=1)  # (N_obs,)
-    nn_idx = idx[:, 0]  # (N_obs,)
+    dists = np.maximum(dists, 1e-2)
+
+    avg_dists = dists.mean(axis=1)     # (N_obs,)
+    nn_idx = idx[:, 0]                 # (N_obs,)
     sigma = np.linalg.norm(obs_errs, axis=1)
 
     logL_i = -0.5 * (avg_dists / sigma) ** 2 - 0.5 * np.log(2 * np.pi * sigma ** 2)
@@ -65,46 +56,20 @@ def nn_loglik(obs_pts, obs_errs, syn_pts, weights=None, k=5, eps=1e-5,
     return logL_i if return_per_point else float(np.sum(logL_i))
 
 
-def passes_thresholds(full_idx,
-                      ordered_lk_cmd, region_threshold_cmd, full_to_masked_cmd,
-                      ordered_lk_ccd=None, region_threshold_ccd=None, full_to_masked_ccd=None):
-    """
-    Check if a candidate passes CMD and CCD thresholds.
-    Returns True if both conditions are satisfied (or CCD not applicable).
-    """
-    m_cmd = full_to_masked_cmd.get(full_idx)
-    if m_cmd is None:
-        return False
-
-    cmd_pass = ordered_lk_cmd[m_cmd] >= region_threshold_cmd
-
-    ccd_pass = True
-    if ordered_lk_ccd is not None and region_threshold_ccd is not None and full_to_masked_ccd is not None:
-        m_ccd = full_to_masked_ccd.get(full_idx)
-        if m_ccd is not None:
-            ccd_pass = ordered_lk_ccd[m_ccd] >= region_threshold_ccd
-
-    return cmd_pass and ccd_pass
-
-
 def knn_likelihood(
     obs_data,
     synth_clust,
     compute_l="cmd",
-    model = None,
     is_imf_weighted=False,
     rmv_contam=False,
     plot=False,
     k=5,
-    penalty=True,            # toggle bluest-point penalty (applied at the end)
-    penalty_halfwidth=0.3,  # half-width of color interval around bluest point (raw color units)
-    pass_percentile=16       # percentile used to define pass/fail threshold inside the bluest region
+    penalty=True,           # toggle bluest-point penalty
+    penalty_halfwidth=0.3   # half-width of color interval around bluest point
 ):
     """
     Compute KNN-based log-likelihood in CMD and/or CCD, return total and per-point vectors.
-    Penalty is applied after CMD and CCD likelihoods are computed: the bluest-color region
-    is inspected, failing candidates have their already-added likelihoods removed, and if a
-    brightest candidate passes, a penalty term is computed and added.
+    If plot=True, show side-by-side CMD and CCD with observed points color-coded by per-point likelihood.
 
     Returns:
         If rmv_contam is False:
@@ -118,44 +83,34 @@ def knn_likelihood(
             masks: dict with 'obs_cmd', 'syn_cmd', 'obs_ccd', 'syn_ccd' boolean masks
     """
 
-    if model == 'baraffe':
-        penalty = False
-
-    # Early exit for empty synthetic cluster
     if synth_clust is None or not np.asarray(synth_clust).any():
+        # Keep return signature consistent
         if rmv_contam:
             return np.inf, np.zeros(len(obs_data['obs_mag']), dtype=bool), None, None, {}
         else:
             return np.inf, None, None, {}
 
-    # Observed data (full-index space)
+    # Observed data
     obs_mag = np.asarray(obs_data['obs_mag'])
     obs_colors = [np.asarray(c) for c in obs_data['obs_colors']]
+
     obs_e_mag = np.asarray(obs_data['obs_e_mag'])
     obs_e_colors = [np.asarray(e) for e in obs_data['obs_e_colors']]
-    n_obs = len(obs_mag)
+
     n_colors_obs = len(obs_colors)
 
     # Synthetic data
-    synth_arrs = [np.asarray(x) for x in synth_clust]
+    synth_arrs = [np.asarray(x)for x in synth_clust]
     mag_syn = synth_arrs[0]
     colors_syn = synth_arrs[1:1 + n_colors_obs]
     mass_probs_syn = synth_arrs[-1] if (is_imf_weighted and len(synth_arrs) == 1 + n_colors_obs + 1) else None
 
-    # Outputs and bookkeeping
-    logL_vec_cmd, logL_vec_ccd = None, None
-    masks = {'obs_cmd': None, 'syn_cmd': None, 'obs_ccd': None, 'syn_ccd': None}
-    contamination_mask = np.zeros(n_obs, dtype=bool)  # full-index space
     total_logL = 0.0
+    logL_vec_cmd, logL_vec_ccd = None, None
 
-    # --------------------------
-    # 1) Compute per-point log-likelihoods (CMD)
-    # --------------------------
-    mask_syn_cmd = mask_obs_cmd = None
-    scaler_cmd = None
-    valid_obs_cmd = np.array([], dtype=int)
-    full_to_masked_cmd = {}
+    masks = {'obs_cmd': None, 'syn_cmd': None, 'obs_ccd': None, 'syn_ccd': None}
 
+    # CMD likelihood (mag, color1)
     if compute_l in {"cmd", "cmd_ccd"} and n_colors_obs >= 1:
         mask_syn_cmd = ~np.isnan(mag_syn) & ~np.isnan(colors_syn[0])
         mask_obs_cmd = (~np.isnan(obs_mag) & ~np.isnan(obs_colors[0]) &
@@ -164,34 +119,89 @@ def knn_likelihood(
         masks['obs_cmd'] = mask_obs_cmd
 
         if mask_syn_cmd.any() and mask_obs_cmd.any():
+            # Build arrays
             pts_syn_cmd_raw = np.column_stack([mag_syn[mask_syn_cmd], colors_syn[0][mask_syn_cmd]])
             pts_obs_cmd_raw = np.column_stack([obs_mag[mask_obs_cmd], obs_colors[0][mask_obs_cmd]])
 
+            # Standard scale both observed and synthetic together
             scaler_cmd = StandardScaler()
             scaler_cmd.fit(np.vstack([pts_obs_cmd_raw, pts_syn_cmd_raw]))
             pts_obs_cmd = scaler_cmd.transform(pts_obs_cmd_raw)
             pts_syn_cmd = scaler_cmd.transform(pts_syn_cmd_raw)
 
-            pts_err_cmd = np.full_like(pts_obs_cmd, 0.02)
+            # Fixed error of 0.01 in scaled space
+            pts_err_cmd = np.full_like(pts_obs_cmd, 0.05)
+
             weights_cmd = mass_probs_syn[mask_syn_cmd] if mass_probs_syn is not None else None
 
-            # nn_loglik must exist in the environment; returns per-point logL in masked order
             logL_vec_cmd = nn_loglik(pts_obs_cmd, pts_err_cmd, pts_syn_cmd, weights_cmd,
-                                     k=k, return_per_point=True, model=model)
+                                     k=k, return_per_point=True)
 
-            logL_vec_cmd  = logL_vec_cmd - np.abs(np.max(logL_vec_cmd))
+            total_logL += np.sum(logL_vec_cmd)
 
-            valid_obs_cmd = np.where(mask_obs_cmd)[0]
-            full_to_masked_cmd = {full_idx: m for m, full_idx in enumerate(valid_obs_cmd)}
+            # Bluest-point penalty (now in scaled CMD space)
+            if penalty:
+                # --- observed bluest point selection ---
+                obs_c1_full = obs_colors[0]
+                valid_obs_c1 = np.where(mask_obs_cmd)[0]
+                idx_obs_blue = valid_obs_c1[np.argmin(obs_c1_full[valid_obs_c1])]
+                color_blue = obs_c1_full[idx_obs_blue]
+                cmin, cmax = color_blue - penalty_halfwidth, color_blue + penalty_halfwidth
 
-    # --------------------------
-    # 1b) Compute per-point log-likelihoods (CCD)
-    # --------------------------
-    mask_syn_ccd = mask_obs_ccd = None
-    scaler_ccd = None
-    valid_obs_ccd = np.array([], dtype=int)
-    full_to_masked_ccd = {}
+                # observed indices within the interval
+                obs_in_region = valid_obs_c1[(obs_c1_full[valid_obs_c1] >= cmin) &
+                                             (obs_c1_full[valid_obs_c1] <= cmax)]
+                if obs_in_region.size > 0:
+                    idx_obs_bright = obs_in_region[np.argmin(obs_mag[obs_in_region])]
+                    # raw observed point (color, mag)
+                    obs_point_cmd_raw = np.array([obs_colors[0][idx_obs_bright],
+                                                  obs_mag[idx_obs_bright]])
+                    obs_err_cmd_raw = np.array([obs_e_colors[0][idx_obs_bright],
+                                                obs_e_mag[idx_obs_bright]])
 
+                    # scale observed point
+                    obs_point_cmd = scaler_cmd.transform(obs_point_cmd_raw.reshape(1, -1))[0]
+
+                    # scale observed error, then apply floor
+                    obs_err_cmd_scaled = scaler_cmd.transform(obs_err_cmd_raw.reshape(1, -1))[0]
+                    sigma_penalty = np.linalg.norm(np.maximum(obs_err_cmd_scaled, 0.15))
+
+                    # --- synthetic candidates within same color interval ---
+                    syn_c1_full = colors_syn[0]
+                    syn_in_region = np.where(mask_syn_cmd &
+                                             (syn_c1_full >= cmin) & (syn_c1_full <= cmax))[0]
+
+                    if syn_in_region.size > 0:
+                        n_obs = len(valid_obs_c1)  # number of observed stars
+                        n_draws = 10
+                        penalties = []
+
+                        for _ in range(n_draws):
+                            # random subsample of synthetic stars
+                            if syn_in_region.size >= n_obs:
+                                syn_sample = np.random.choice(syn_in_region, size=n_obs, replace=False)
+                            else:
+                                syn_sample = np.random.choice(syn_in_region, size=n_obs, replace=True)
+
+                            # pick brightest synthetic star in this subsample
+                            idx_syn_bright = syn_sample[np.argmin(mag_syn[syn_sample])]
+                            syn_point_cmd_raw = np.array([colors_syn[0][idx_syn_bright],
+                                                          mag_syn[idx_syn_bright]])
+
+                            # scale synthetic point
+                            syn_point_cmd = scaler_cmd.transform(syn_point_cmd_raw.reshape(1, -1))[0]
+
+                            # compute penalty in scaled space with error floor
+                            penalty_dist = np.linalg.norm(syn_point_cmd - obs_point_cmd)
+                            logL_penalty = -0.5 * (penalty_dist / sigma_penalty) ** 2 \
+                                           - 0.5 * np.log(2 * np.pi * sigma_penalty ** 2)
+                            penalties.append(logL_penalty)
+
+                        # average penalty across draws
+                        avg_penalty = np.mean(penalties)
+                        total_logL += avg_penalty
+
+    # CCD likelihood (color1, color2)
     if compute_l in {"ccd", "cmd_ccd"} and n_colors_obs >= 2:
         mask_syn_ccd = ~np.isnan(colors_syn[0]) & ~np.isnan(colors_syn[1])
         mask_obs_ccd = (~np.isnan(obs_colors[0]) & ~np.isnan(obs_colors[1]) &
@@ -203,155 +213,73 @@ def knn_likelihood(
             pts_syn_ccd_raw = np.column_stack([colors_syn[0][mask_syn_ccd], colors_syn[1][mask_syn_ccd]])
             pts_obs_ccd_raw = np.column_stack([obs_colors[0][mask_obs_ccd], obs_colors[1][mask_obs_ccd]])
 
+            # Standard scale both observed and synthetic together
             scaler_ccd = StandardScaler()
             scaler_ccd.fit(np.vstack([pts_obs_ccd_raw, pts_syn_ccd_raw]))
             pts_obs_ccd = scaler_ccd.transform(pts_obs_ccd_raw)
             pts_syn_ccd = scaler_ccd.transform(pts_syn_ccd_raw)
 
-            pts_err_ccd = np.full_like(pts_obs_ccd, 0.01)
+            # Fixed error of 0.01 in scaled space
+            pts_err_ccd = np.full_like(pts_obs_ccd, 0.05)
+
             weights_ccd = mass_probs_syn[mask_syn_ccd] if mass_probs_syn is not None else None
 
             logL_vec_ccd = nn_loglik(pts_obs_ccd, pts_err_ccd, pts_syn_ccd, weights_ccd,
-                                     k=k, return_per_point=True, model=model)
+                                     k=k, return_per_point=True)
 
-            logL_vec_ccd  = logL_vec_ccd - np.abs(np.max(logL_vec_ccd))
+            total_logL += np.sum(logL_vec_ccd)
 
-            valid_obs_ccd = np.where(mask_obs_ccd)[0]
-            full_to_masked_ccd = {full_idx: m for m, full_idx in enumerate(valid_obs_ccd)}
+    # Optional plotting: only plot masked observed points to match vector lengths
+    if plot:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 
-    # --------------------------
-    # 2) Initial total_logL: sum all per-point contributions (we will remove failing ones in penalty)
-    # --------------------------
-    total_logL = 0.0
-    if logL_vec_cmd is not None:
-        total_logL += np.sum(logL_vec_cmd)
-    if logL_vec_ccd is not None:
-        total_logL += np.sum(logL_vec_ccd)
+        # CMD
+        if logL_vec_cmd is not None:
+            # Use only masked observed points
+            obs_color1_cmd = obs_colors[0][masks['obs_cmd']]
+            obs_mag_cmd = obs_mag[masks['obs_cmd']]
+            syn_color1_cmd = colors_syn[0][masks['syn_cmd']]
+            syn_mag_cmd = mag_syn[masks['syn_cmd']]
 
-    # --------------------------
-    # 3) Penalty: evaluate at the end, only inside bluest-color region
-    # --------------------------
-    if penalty and (logL_vec_cmd is not None) and (scaler_cmd is not None):
-        valid_obs_cmd_arr = valid_obs_cmd if valid_obs_cmd.size > 0 else np.array([], dtype=int)
-        if valid_obs_cmd_arr.size > 0:
-            # 3.1) find bluest point among CMD-valid observed stars
-            idx_blue = valid_obs_cmd_arr[np.argmin(obs_colors[0][valid_obs_cmd_arr])]
-            color_blue = obs_colors[0][idx_blue]
-            cmin, cmax = color_blue - penalty_halfwidth, color_blue + penalty_halfwidth
+            sc1 = axes[0].scatter(obs_color1_cmd, obs_mag_cmd, c=logL_vec_cmd,
+                                  cmap='viridis', s=40, edgecolor='k', label='Observed')
+            axes[0].scatter(syn_color1_cmd, syn_mag_cmd, c='red', alpha=0.5, s=20, label='Synthetic')
+            axes[0].invert_yaxis()
+            axes[0].set_xlabel("Color 1")
+            axes[0].set_ylabel("Magnitude")
+            axes[0].set_title("CMD")
+            axes[0].legend()
+            fig.colorbar(sc1, ax=axes[0], label='Log-likelihood per point')
+        else:
+            axes[0].set_visible(False)
 
-            # 3.2) region: full indices of observed stars within the color window
-            region_full = valid_obs_cmd_arr[(obs_colors[0][valid_obs_cmd_arr] >= cmin) &
-                                            (obs_colors[0][valid_obs_cmd_arr] <= cmax)]
+        # CCD
+        if logL_vec_ccd is not None:
+            obs_c1_ccd = obs_colors[0][masks['obs_ccd']]
+            obs_c2_ccd = obs_colors[1][masks['obs_ccd']]
+            syn_c1_ccd = colors_syn[0][masks['syn_ccd']]
+            syn_c2_ccd = colors_syn[1][masks['syn_ccd']]
 
-            if region_full.size > 0:
-                # 3.3) ordered scores for CMD
-                region_masked_cmd = [full_to_masked_cmd[i] for i in region_full if i in full_to_masked_cmd]
-                if len(region_masked_cmd) > 0:
-                    ordered_region_cmd = logL_vec_cmd[np.array(region_masked_cmd, dtype=int)]
-                    region_threshold_cmd = 3 * np.percentile(ordered_region_cmd, pass_percentile)
+            sc2 = axes[1].scatter(obs_c1_ccd, obs_c2_ccd, c=logL_vec_ccd,
+                                  cmap='plasma', s=40, edgecolor='k', label='Observed')
+            axes[1].scatter(syn_c1_ccd, syn_c2_ccd, c='red', alpha=0.5, s=20, label='Synthetic')
+            axes[1].set_xlabel("Color 1")
+            axes[1].set_ylabel("Color 2")
+            axes[1].set_title("CCD")
+            axes[1].legend()
+            fig.colorbar(sc2, ax=axes[1], label='Log-likelihood per point')
+        else:
+            axes[1].set_visible(False)
 
-                    # 3.3b) ordered scores for CCD (if available)
-                    region_threshold_ccd = None
-                    if logL_vec_ccd is not None and scaler_ccd is not None:
-                        region_masked_ccd = [full_to_masked_ccd[i] for i in region_full if i in full_to_masked_ccd]
-                        if len(region_masked_ccd) > 0:
-                            ordered_region_ccd = logL_vec_ccd[np.array(region_masked_ccd, dtype=int)]
-                            region_threshold_ccd = 5 * np.percentile(ordered_region_ccd, pass_percentile)
+        plt.tight_layout()
+        plt.show()
 
-                    # 3.5) iterate candidates in region by brightness
-                    sorted_candidates = region_full[np.argsort(obs_mag[region_full])]
-                    chosen_full_idx = None
-
-                    for full_idx in sorted_candidates:
-                        m_cmd = full_to_masked_cmd.get(full_idx)
-                        m_ccd = full_to_masked_ccd.get(full_idx)
-
-                        if m_cmd is None:
-                            continue
-
-                        cmd_pass = logL_vec_cmd[m_cmd] >= region_threshold_cmd
-                        ccd_pass = True
-                        if logL_vec_ccd is not None and region_threshold_ccd is not None and m_ccd is not None:
-                            ccd_pass = logL_vec_ccd[m_ccd] >= region_threshold_ccd
-
-                        if cmd_pass and ccd_pass:
-                            chosen_full_idx = full_idx
-                            break
-                        else:
-                            # Candidate fails: remove likelihoods
-                            if not contamination_mask[full_idx]:
-                                total_logL -= logL_vec_cmd[m_cmd]
-                                if (logL_vec_ccd is not None) and (m_ccd is not None):
-                                    total_logL -= logL_vec_ccd[m_ccd]
-                                contamination_mask[full_idx] = True
-
-                    # 3.6) Apply penalty if a candidate passed both CMD and CCD
-                    if chosen_full_idx is not None:
-                        obs_point_cmd_raw = np.array([obs_colors[0][chosen_full_idx],
-                                                      obs_mag[chosen_full_idx]])
-                        obs_err_cmd_raw = np.array([obs_e_colors[0][chosen_full_idx],
-                                                    obs_e_mag[chosen_full_idx]])
-
-                        # scale observed point
-                        obs_point_cmd = scaler_cmd.transform(obs_point_cmd_raw.reshape(1, -1))[0]
-
-                        # scale observed errors correctly
-                        cmd_scales = scaler_cmd.scale_
-                        cmd_scales_safe = np.where(cmd_scales == 0, 1.0, cmd_scales)
-                        obs_err_cmd_scaled = obs_err_cmd_raw / cmd_scales_safe
-
-                        # combined sigma with floor
-                        sigma_penalty = np.linalg.norm(np.maximum(obs_err_cmd_scaled, 0.03))
-
-                        # synthetic candidates in same raw-color interval
-                        syn_c1_full = colors_syn[0]
-                        syn_in_region = np.where(mask_syn_cmd &
-                                                 (syn_c1_full >= cmin) & (syn_c1_full <= cmax))[0]
-
-                        if syn_in_region.size > 0:
-                            n_obs_cmd = len(valid_obs_cmd_arr) if len(valid_obs_cmd_arr) > 0 else 1
-                            n_draws = 100
-
-                            # --- sample indices for all draws at once ---
-                            if syn_in_region.size >= n_obs_cmd and n_obs_cmd > 0:
-                                syn_samples = np.array([
-                                    np.random.choice(syn_in_region, size=n_obs_cmd, replace=False)
-                                    for _ in range(n_draws)
-                                ])
-                            else:
-                                syn_samples = np.array([
-                                    np.random.choice(syn_in_region, size=max(1, n_obs_cmd), replace=True)
-                                    for _ in range(n_draws)
-                                ])
-
-                            # --- pick brightest index per draw (vectorized argmin along axis=1) ---
-                            idx_syn_bright = syn_samples[np.arange(n_draws), np.argmin(mag_syn[syn_samples], axis=1)]
-
-                            # --- build raw CMD points for all draws ---
-                            syn_points_cmd_raw = np.column_stack([colors_syn[0][idx_syn_bright],
-                                                                  mag_syn[idx_syn_bright]])
-
-                            # --- scale all points at once ---
-                            syn_points_cmd = scaler_cmd.transform(syn_points_cmd_raw)
-
-                            # --- compute distances to obs_point_cmd (broadcasted subtraction) ---
-                            penalty_dists = np.linalg.norm(syn_points_cmd - obs_point_cmd, axis=1)
-
-                            # --- compute logL penalties vectorized ---
-                            logL_penalties = -0.5 * (penalty_dists / sigma_penalty) ** 2 \
-                                             - 0.5 * np.log(2 * np.pi * sigma_penalty ** 2)
-
-                            # --- average and add ---
-                            avg_penalty = np.median(logL_penalties)
-                            total_logL += avg_penalty
-
-                            # --------------------------
-    # 4) Final return (match original signature)
-    # --------------------------
+    # Return values — keep consistent signatures
     if rmv_contam:
-        return total_logL, contamination_mask
+        contamination_mask = np.zeros(len(obs_mag), dtype=bool)
+        return -total_logL, contamination_mask
     else:
-        return total_logL
+        return -total_logL
 
 
 
@@ -422,39 +350,9 @@ def plot_kde_overlay(kde_gauss, kde_exp, scaler, grid_ref_pts, overlay_pts,
 
 
 def kde_distance(obs_data: dict, synth_clust: np.ndarray,
-                 compute_l: str = "cmd", bandwidth: float = 0.01,
-                 plot: bool = False, rmv_contam: bool = False, penalty=False,
-                 penalty_halfwidth=0.5):
-    """
-    Compare observed vs synthetic distributions using KDE-based scoring.
-    This version incorporates mass probabilities (synth_arrs[-1]) so synthetic stars
-    contribute according to their predicted probability.
+                 compute_l: str = "cmd", bandwidth: float = 0.05,
+                 plot: bool = True, rmv_contam: bool = False):
 
-    Parameters
-    ----------
-    obs_data : dict
-        Must contain 'obs_mag', 'obs_colors', 'obs_e_mag', 'obs_e_colors'.
-    synth_clust : np.ndarray
-        Sequence-like: [mag_syn, color1_syn, color2_syn, ..., mass_probs]
-        where mass_probs is the last array with per-star probabilities.
-    compute_l : {"cmd", "ccd", "cmd_ccd"}
-        Which likelihoods to compute (CMD, CCD, or both).
-    bandwidth : float
-        Base KDE bandwidth for Gaussian kernel; exponential uses 2*bandwidth.
-    plot : bool
-        Whether to produce diagnostic plots.
-    rmv_contam : bool
-        If True, also return a contamination mask (currently zeros).
-    penalty : bool
-        If True, add a bluest-point penalty term in CMD space.
-    penalty_halfwidth : float
-        Half-width (in raw color units) around the bluest observed color for penalty region.
-
-    Returns
-    -------
-    float or (float, np.ndarray)
-        Negative combined score; if rmv_contam=True, also returns a boolean mask.
-    """
     if synth_clust is None or not np.asarray(synth_clust).any():
         return (1e9, np.array([], dtype=bool)) if rmv_contam else 1e9
 
@@ -468,136 +366,81 @@ def kde_distance(obs_data: dict, synth_clust: np.ndarray,
     obs_e_mag = np.asarray(obs_data['obs_e_mag'])
     obs_e_colors = [np.asarray(e) for e in obs_data['obs_e_colors']]
 
-    # Sample observed data using Gaussian errors
-    obs_mag = np.random.normal(loc=obs_mag, scale=obs_e_mag)
+    # Sampled data using Gaussian errors
+    obs_mag  = np.random.normal(loc=obs_mag, scale=obs_e_mag)
     obs_colors = [np.random.normal(loc=c, scale=e) for c, e in zip(obs_colors, obs_e_colors)]
+
+    # print(max(abs(obs_mag_mod - obs_mag)))
+    # print(max(abs(obs_colors[0] - obs_colors_mod[0])))
+    # print(max(abs(obs_colors[1] - obs_colors_mod[1])))
 
     n_colors_obs = len(obs_colors)
 
     synth_arrs = [np.asarray(x) for x in synth_clust]
     mag_syn = synth_arrs[0]
     colors_syn = synth_arrs[1:1 + n_colors_obs]
-    mass_probs_full = np.asarray(synth_arrs[-1])  # per-star probabilities
 
     combined_score = 0.0
     max_dist_cmd = 0.0  # default in case penalty isn't triggered
-    log_scores_cmd = np.array([])  # to avoid reference before assignment
 
     # --- CMD block ---
     if compute_l in {"cmd", "cmd_ccd"} and n_colors_obs >= 1:
-        mask_syn_cmd = ~np.isnan(mag_syn) & ~np.isnan(colors_syn[0]) & ~np.isnan(mass_probs_full)
+        mask_syn_cmd = ~np.isnan(mag_syn) & ~np.isnan(colors_syn[0])
         mask_obs_cmd = ~np.isnan(obs_mag) & ~np.isnan(obs_colors[0])
-
         if mask_syn_cmd.sum() > 0 and mask_obs_cmd.sum() > 0:
             pts_syn_cmd = np.vstack([mag_syn[mask_syn_cmd], colors_syn[0][mask_syn_cmd]]).T
             pts_obs_cmd = np.vstack([obs_mag[mask_obs_cmd], obs_colors[0][mask_obs_cmd]]).T
 
-            # Mass probabilities for synthetic stars (normalized, clipped)
-            mass_probs_cmd = mass_probs_full[mask_syn_cmd].astype(float)
-            mass_probs_cmd = np.clip(mass_probs_cmd, 1e-12, None)
-            mass_probs_cmd /= mass_probs_cmd.sum()
-
-            # Resample synthetic stars proportional to mass_probs to form KDE support
-            n_syn_cmd = len(pts_syn_cmd)
-            resample_idx_cmd = np.random.choice(
-                np.arange(n_syn_cmd), size=n_syn_cmd, replace=True, p=mass_probs_cmd
-            )
-            pts_syn_cmd_weighted = pts_syn_cmd[resample_idx_cmd]
-
-            # Scale by observed CMD distribution
             scaler_cmd = StandardScaler().fit(pts_obs_cmd)
             obs_scaled_cmd = scaler_cmd.transform(pts_obs_cmd)
-            syn_scaled_cmd = scaler_cmd.transform(pts_syn_cmd_weighted)
+            syn_scaled_cmd = scaler_cmd.transform(pts_syn_cmd)
 
-            # Fit KDEs on probability-weighted synthetic support
-            kde_gauss_cmd = KernelDensity(bandwidth=bandwidth, kernel="gaussian").fit(syn_scaled_cmd)
-            kde_exp_cmd = KernelDensity(bandwidth=1.5 * bandwidth, kernel="exponential").fit(syn_scaled_cmd)
+            kde_gauss = KernelDensity(bandwidth=bandwidth, kernel="gaussian").fit(syn_scaled_cmd)
+            kde_exp = KernelDensity(bandwidth=1.5 * bandwidth, kernel="exponential").fit(syn_scaled_cmd)
 
             log_floor = np.log(1e-6)
-            log_scores_gauss = np.maximum(kde_gauss_cmd.score_samples(obs_scaled_cmd), log_floor)
-            log_scores_exp = np.maximum(kde_exp_cmd.score_samples(obs_scaled_cmd), log_floor)
 
-            # Combine kernels (sum of logs = log of product; here simply additive as originally)
-            log_scores_cmd = (log_scores_gauss + log_scores_exp)
+            log_scores_gauss = kde_gauss.score_samples(obs_scaled_cmd)
+            log_scores_exp = kde_exp.score_samples(obs_scaled_cmd)
+
+            log_scores_gauss = np.maximum(log_scores_gauss, log_floor)
+            log_scores_exp = np.maximum(log_scores_exp, log_floor)
+
+            log_scores_cmd = (log_scores_gauss + log_scores_exp) # log_scores_gauss # 0.5 *
+
             combined_score += np.sum(log_scores_cmd)
 
-            # Bluest-point penalty (in raw CMD space, selection by color band)
-            if penalty:
-                obs_c1_full = obs_colors[0]
-                valid_obs_c1 = np.where(mask_obs_cmd)[0]
-                idx_obs_blue = valid_obs_c1[np.argmin(obs_c1_full[valid_obs_c1])]
-                color_blue = obs_c1_full[idx_obs_blue]
-                cmin, cmax = color_blue - penalty_halfwidth, color_blue + penalty_halfwidth
+            # Penalty around bluest point
+            idx_obs_blue = np.argmin(obs_colors[0])
+            color_blue = obs_colors[0][idx_obs_blue]
+            color_interval = (color_blue - 1, color_blue + 1)
 
-                obs_in_region = valid_obs_c1[
-                    (obs_c1_full[valid_obs_c1] >= cmin) & (obs_c1_full[valid_obs_c1] <= cmax)
-                ]
-                if obs_in_region.size > 0:
-                    idx_obs_bright = obs_in_region[np.argmin(obs_mag[obs_in_region])]
+            obs_in_region = np.where((obs_colors[0] >= color_interval[0]) &
+                                     (obs_colors[0] <= color_interval[1]))[0]
+            if obs_in_region.size > 0:
+                # brightest observation = lowest magnitude in region
+                idx_obs_bright = obs_in_region[np.argmin(obs_mag[obs_in_region])]
+                obs_point_cmd = np.array([obs_colors[0][idx_obs_bright],
+                                          obs_mag[idx_obs_bright]])
 
-                    # raw observed point (color, mag)
-                    obs_point_cmd_raw = np.array([obs_colors[0][idx_obs_bright],
-                                                  obs_mag[idx_obs_bright]])
-                    obs_err_cmd_raw = np.array([obs_e_colors[0][idx_obs_bright],
-                                                obs_e_mag[idx_obs_bright]])
+                syn_in_region = np.where((colors_syn[0] >= color_interval[0]) &
+                                         (colors_syn[0] <= color_interval[1]))[0]
 
-                    # scale observed point
-                    obs_point_cmd = scaler_cmd.transform(obs_point_cmd_raw.reshape(1, -1))[0]
+                if syn_in_region.size > 0:
+                    # brightest synthetic = lowest magnitude in region
+                    idx_syn_bright = syn_in_region[np.argmin(mag_syn[syn_in_region])]
+                    syn_point_cmd = np.array([colors_syn[0][idx_syn_bright],
+                                              mag_syn[idx_syn_bright]])
 
-                    # scale observed error (approximate; use floor for stability)
-                    obs_err_cmd_scaled = scaler_cmd.transform(obs_err_cmd_raw.reshape(1, -1))[0]
-                    sigma_penalty = np.linalg.norm(np.maximum(obs_err_cmd_scaled, 0.1))
-
-                    # synthetic candidates within same color interval (raw space)
-                    syn_c1_full = colors_syn[0]
-                    syn_in_region_mask = mask_syn_cmd & (syn_c1_full >= cmin) & (syn_c1_full <= cmax)
-                    syn_in_region_idx_all = np.where(syn_in_region_mask)[0]
-
-                    if syn_in_region_idx_all.size > 0:
-                        # restrict probabilities to region and normalize
-                        region_probs = mass_probs_full[syn_in_region_idx_all].astype(float)
-                        region_probs = np.clip(region_probs, 1e-12, None)
-                        region_probs /= region_probs.sum()
-
-                        n_obs = len(valid_obs_c1)
-                        n_draws = 10
-                        penalties = []
-
-                        for _ in range(n_draws):
-                            # probability-weighted subsample of synthetic stars in the region
-                            if syn_in_region_idx_all.size >= n_obs:
-                                syn_sample = np.random.choice(
-                                    syn_in_region_idx_all, size=n_obs, replace=False, p=region_probs
-                                )
-                            else:
-                                syn_sample = np.random.choice(
-                                    syn_in_region_idx_all, size=n_obs, replace=True, p=region_probs
-                                )
-
-                            # pick brightest synthetic star in this subsample
-                            idx_syn_bright = syn_sample[np.argmin(mag_syn[syn_sample])]
-                            syn_point_cmd_raw = np.array([colors_syn[0][idx_syn_bright],
-                                                          mag_syn[idx_syn_bright]])
-
-                            # scale synthetic point
-                            syn_point_cmd = scaler_cmd.transform(syn_point_cmd_raw.reshape(1, -1))[0]
-
-                            # Gaussian penalty in scaled space
-                            penalty_dist = np.linalg.norm(syn_point_cmd - obs_point_cmd)
-                            logL_penalty = -0.5 * (penalty_dist / sigma_penalty) ** 2 \
-                                           - 0.5 * np.log(2 * np.pi * sigma_penalty ** 2)
-                            penalties.append(logL_penalty)
-
-                        avg_penalty = np.mean(penalties)
-                        # print('ola', avg_penalty)
-                        combined_score += avg_penalty
+                    # distance between brightest obs and brightest syn
+                    max_dist_cmd = np.linalg.norm(syn_point_cmd - obs_point_cmd)
 
             if plot:
                 fig, ax = plt.subplots(figsize=(6, 5))
                 sc = ax.scatter(obs_scaled_cmd[:, 1], obs_scaled_cmd[:, 0], c=log_scores_cmd,
                                 cmap='viridis', s=20, label="Observed")
                 ax.scatter(syn_scaled_cmd[:, 1], syn_scaled_cmd[:, 0], c='gray', s=10,
-                           alpha=0.5, label="Synthetic KDE support (mass-weighted)")
+                           alpha=0.5, label="Synthetic KDE support")
                 ax.invert_yaxis()
                 ax.set_xlabel("Color (scaled)")
                 ax.set_ylabel("Magnitude (scaled)")
@@ -606,54 +449,39 @@ def kde_distance(obs_data: dict, synth_clust: np.ndarray,
                 plt.colorbar(sc, label="Log KDE score")
                 plt.show()
 
-                # Optional overlay plot function call (assumed to exist in your environment)
-                try:
-                    plot_kde_overlay(
-                        kde_gauss_cmd, kde_exp_cmd, scaler_cmd,
-                        syn_scaled_cmd,  # reference grid from synthetic CMD points
-                        obs_scaled_cmd,  # overlay observed CMD points
-                        xlabel="Color", ylabel="Magnitude",
-                        title=f"CMD KDE overlay (avg Gauss+Exp, bw={bandwidth})",
-                        is_cmd=True
-                    )
-                except Exception:
-                    pass
+                plot_kde_overlay(
+                    kde_gauss, kde_exp, scaler_cmd,
+                    syn_scaled_cmd,  # reference grid from synthetic CMD points
+                    obs_scaled_cmd,  # overlay observed CMD points
+                    xlabel="Color", ylabel="Magnitude",
+                    title=f"CMD KDE overlay (avg Gauss+Exp, bw={bandwidth})",
+                    is_cmd=True
+                )
 
     # --- CCD block ---
     if compute_l in {"ccd", "cmd_ccd"} and n_colors_obs >= 2:
-        mask_syn_ccd = ~np.isnan(colors_syn[0]) & ~np.isnan(colors_syn[1]) & ~np.isnan(mass_probs_full)
+        mask_syn_ccd = ~np.isnan(colors_syn[0]) & ~np.isnan(colors_syn[1])
         mask_obs_ccd = ~np.isnan(obs_colors[0]) & ~np.isnan(obs_colors[1])
-
         if mask_syn_ccd.sum() > 0 and mask_obs_ccd.sum() > 0:
             pts_syn_ccd = np.vstack([colors_syn[0][mask_syn_ccd], colors_syn[1][mask_syn_ccd]]).T
             pts_obs_ccd = np.vstack([obs_colors[0][mask_obs_ccd], obs_colors[1][mask_obs_ccd]]).T
 
-            # Mass probabilities for synthetic stars (normalized, clipped)
-            mass_probs_ccd = mass_probs_full[mask_syn_ccd].astype(float)
-            mass_probs_ccd = np.clip(mass_probs_ccd, 1e-12, None)
-            mass_probs_ccd /= mass_probs_ccd.sum()
-
-            # Resample synthetic stars proportional to mass_probs for KDE support
-            n_syn_ccd = len(pts_syn_ccd)
-            resample_idx_ccd = np.random.choice(
-                np.arange(n_syn_ccd), size=n_syn_ccd, replace=True, p=mass_probs_ccd
-            )
-            pts_syn_ccd_weighted = pts_syn_ccd[resample_idx_ccd]
-
-            # Scale by observed CCD distribution
             scaler_ccd = StandardScaler().fit(pts_obs_ccd)
             obs_scaled_ccd = scaler_ccd.transform(pts_obs_ccd)
-            syn_scaled_ccd = scaler_ccd.transform(pts_syn_ccd_weighted)
+            syn_scaled_ccd = scaler_ccd.transform(pts_syn_ccd)
 
-            # Fit KDEs on probability-weighted synthetic support
-            kde_gauss_ccd = KernelDensity(bandwidth=bandwidth, kernel="gaussian").fit(syn_scaled_ccd)
-            kde_exp_ccd = KernelDensity(bandwidth= 1.5 * bandwidth, kernel="exponential").fit(syn_scaled_ccd)
+            kde_gauss = KernelDensity(bandwidth=bandwidth, kernel="gaussian").fit(syn_scaled_ccd)
+            kde_exp = KernelDensity(bandwidth=1.5 * bandwidth, kernel="exponential").fit(syn_scaled_ccd)
 
-            log_floor = np.log(1e-6)
-            log_scores_gauss_ccd = np.maximum(kde_gauss_ccd.score_samples(obs_scaled_ccd), log_floor)
-            log_scores_exp_ccd = np.maximum(kde_exp_ccd.score_samples(obs_scaled_ccd), log_floor)
+            log_scores_gauss = kde_gauss.score_samples(obs_scaled_ccd)
+            log_scores_exp = kde_exp.score_samples(obs_scaled_ccd)
 
-            log_scores_ccd = 0.5 * (log_scores_gauss_ccd + log_scores_exp_ccd)
+            log_floor = np.log(1e-6)  # ≈ -9.21034
+            log_scores_gauss = np.maximum(log_scores_gauss, log_floor)
+            log_scores_exp = np.maximum(log_scores_exp, log_floor)
+
+            log_scores_ccd = 0.5 * (log_scores_gauss + log_scores_exp) # log_scores_gauss #
+
             combined_score += np.sum(log_scores_ccd)
 
             if plot:
@@ -661,7 +489,7 @@ def kde_distance(obs_data: dict, synth_clust: np.ndarray,
                 sc = ax.scatter(pts_obs_ccd[:, 0], pts_obs_ccd[:, 1], c=log_scores_ccd,
                                 cmap='plasma', s=20, label="Observed")
                 ax.scatter(pts_syn_ccd[:, 0], pts_syn_ccd[:, 1], c='gray', s=10,
-                           alpha=0.5, label="Synthetic KDE support (mass-weighted)")
+                           alpha=0.5, label="Synthetic KDE support")
                 ax.set_xlabel("Color 1")
                 ax.set_ylabel("Color 2")
                 ax.set_title(f"CCD KDE: bandwidth={bandwidth}")
@@ -669,30 +497,22 @@ def kde_distance(obs_data: dict, synth_clust: np.ndarray,
                 plt.colorbar(sc, label="Log KDE score")
                 plt.show()
 
-                try:
-                    plot_kde_overlay(
-                        kde_gauss_ccd, kde_exp_ccd, scaler_ccd,
-                        pts_syn_ccd,  # synthetic CCD points (unscaled for overlay)
-                        pts_obs_ccd,  # observed CCD points (unscaled for overlay)
-                        xlabel="Color 1", ylabel="Color 2",
-                        title=f"CCD KDE overlay (avg Gauss+Exp, bw={bandwidth})",
-                        is_cmd=False
-                    )
-                except Exception:
-                    pass
+                plot_kde_overlay(
+                    kde_gauss, kde_exp, scaler_ccd,
+                    pts_syn_ccd,  # synthetic CCD points
+                    pts_obs_ccd,  # observed CCD points
+                    xlabel="Color 1", ylabel="Color 2",
+                    title=f"CCD KDE overlay (avg Gauss+Exp, bw={bandwidth})",
+                    is_cmd=False
+                )
 
-    # Optional additional penalty term (kept from original)
-    # If cmd was computed, subtract term scaled by number of CMD points
-    if log_scores_cmd.size > 0:
-
-        combined_score += max_dist_cmd
+    combined_score += - max_dist_cmd * (len(log_scores_cmd))
 
     if rmv_contam:
         contamination_mask = np.zeros(len(obs_mag), dtype=bool)
-        return combined_score, contamination_mask
+        return -combined_score, contamination_mask
     else:
-        return combined_score
-
+        return -combined_score
 
 
 def lkl_data(
